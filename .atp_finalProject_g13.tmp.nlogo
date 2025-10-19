@@ -20,6 +20,9 @@ cars-own [
   arrival-time ; tick at which we reached stop-line
   enqueued?
   observed?
+  stop-line?
+  route          ; list of patches for the current plan
+  route-idx      ; index of current patch inside route
 ]
 
 globals [
@@ -39,12 +42,20 @@ patches-own [
 ]
 
 to go
-  ask cars [
+  ask cars with [not enqueued?] [
     if patch-here = goal [
       set goal one-of patches with [pcolor = white]
+      plan-route goal
     ]
+    ifelse route != [] [
+      let here-idx position patch-here route
+      if here-idx != false [ set route-idx here-idx ]
+    ][
+      ; route vanished → re-plan
+      plan-route goal
+    ]
+
     adjust-speed
-    recolor-agent
     forward speed
   ]
   tick
@@ -71,23 +82,6 @@ to adjust-speed
     ]
 end
 
-to recolor-agent
-  ifelse speed <= 0 [
-    set color red
-  ] [
-    set color blue
-  ]
-  set travel-time travel-time + 1
-  if member? patch-here intersection [
-    if (travel-time > 5) [
-      ask patch-here [
-        set wait-times wait-times + [travel-time] of myself
-        set wait-count wait-count + 1
-      ]
-    ]
-    set travel-time 0
-  ]
-end
 
 
 
@@ -109,6 +103,9 @@ to setup
   set-default-shape cars "car top"
   create-cars number-of-cars [
     set size 1.5
+    set enqueued? false
+    set observed? false
+    set arrival-time -1
     let road-location one-of road with [ not any? cars-on self]
     setxy ([ pxcor ] of road-location) ([ pycor ] of road-location)
     set current-direction [direction] of road-location
@@ -116,11 +113,12 @@ to setup
     if current-direction = "east"  [ set heading 90  ]
     if current-direction = "south" [ set heading 180 ]
     if current-direction = "west"  [ set heading 270 ]
-    set goal-speed 0.7 ; Some variation in goal speed
+    set goal-speed 0.7
     set speed 0.7
     set color blue
     set travel-time 0
     set goal one-of patches with [pcolor = white]
+    plan-route goal
   ]
   reset-ticks
 end
@@ -128,6 +126,9 @@ end
 to setup-world
   ask patches [
     set pcolor black
+    set stopline? false
+    set intersection-id 0
+    set intersection-of nobody
     if (pycor mod 20 = 0 or pycor = 1 or pycor = 21 or pycor = -19) [
       set pcolor white
       set direction "east"
@@ -164,13 +165,13 @@ to setup-world
   ]
   reps
 
-  ;; 5. Get grid coordinates for numbering
+  ;; Get grid coordinates for numbering
   let cols sort remove-duplicates [pxcor] of reps
   let rows reverse sort remove-duplicates [pycor] of reps
   let ncols length cols
   let id-counter 0
 
-  ;; 6. Create one junction agent per 2×2 intersection
+  ;; Create one junction agent per 2×2 intersection
   foreach sorted-reps [ rep ->
     set id-counter id-counter + 1
     let cx ([pxcor] of rep) + 0.5
@@ -196,13 +197,68 @@ to setup-world
     ask (patch-set rep patchE patchS patchSE) [
       set intersection-id id-counter
       set intersection-of one-of junctions with [id = id-counter]
-      set plabel intersection-id
-      set plabel-color black
+    ]
+    ask patches with [
+      pcolor = white and any? neighbors4 with [pcolor = yellow]
+    ] [
+      set stopline? true
     ]
 
   ]
-
 end
+
+; ---- SHORTEST PATH ON THE ROAD GRID (BFS = Dijkstra on unit weights) ----
+to-report shortest-path [start dest]  ;; reports list of patches from start→goal
+  if start = dest [ report (list start) ]
+  let visited (list start)
+  let queue (list (list start))
+  while [ not empty? queue ] [
+    let path first queue
+    set queue but-first queue
+    let last-patch last path
+    let nbrs [neighbors4] of last-patch with [pcolor = white ]
+    foreach sort nbrs [ n ->
+      if not member? n visited [
+        let newpath sentence path n
+        if n = goal [ report newpath ]
+        set visited lput n visited
+        set queue lput newpath queue
+      ]
+    ]
+  ]
+  report []  ;; no route (shouldn’t happen if the grid is connected)
+end
+
+; ---- DIRECTIONS & TURN COMPUTATION ----
+to-report step-direction [from dest]  ;; cardinal direction of the step from→to
+  let dist-x ([pxcor] of dest) - ([pxcor] of from)
+  let dist-y ([pycor] of dest) - ([pycor] of from)
+  if dist-x =  1 [ report "east"  ]
+  if dist-x = -1 [ report "west"  ]
+  if dist-y =  1 [ report "north" ]
+  if dist-y = -1 [ report "south" ]
+  report "unknown"
+end
+
+to-report turn-from-to [dir1 dir2]  ;; turn needed to change dir1→dir2
+  let cw ["north" "east" "south" "west"]
+  let i position dir1 cw
+  let j position dir2 cw
+  let d (j - i) mod 4
+  if d = 0 [ report "straight" ]
+  if d = 1 [ report "right"    ]
+  if d = 3 [ report "left"     ]
+  report "straight"
+end
+
+to plan-route [g]  ;; car proc: set route & route-idx towards goal g
+  set goal g
+  set route shortest-path patch-here goal
+  set route-idx position patch-here route
+  if route-idx = false [ set route-idx 0 ]  ;; safety
+end
+
+
 
 
 @#$#@#$#@
