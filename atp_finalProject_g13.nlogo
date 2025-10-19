@@ -1,6 +1,13 @@
 breed [cars car]
+breed [junctions junction]
 
-turtles-own [
+junctions-own [
+  id
+  qN qE qS qW
+  crossing-now
+]
+
+cars-own [
   speed
   goal-speed
   travel-time
@@ -10,22 +17,29 @@ turtles-own [
   next-intersection
   distance-to-next-intersection
   current-direction ; north, south, east, west
+  arrival-time ; tick at which we reached stop-line
+  enqueued?
+  observed?
 ]
 
 globals [
   road
   intersection
   direction-map
+  clockwise ; ["north" "east" "south" "west"] helper
 ]
 
 patches-own [
   wait-times
   wait-count
   direction ; the direction of the road (north, south, east, west)
+  stopline? ; true at the 4 patches around each intersection
+  intersection-id
+  intersection-of
 ]
 
 to go
-  ask turtles [
+  ask cars [
     if patch-here = goal [
       set goal one-of patches with [pcolor = white]
     ]
@@ -37,7 +51,7 @@ to go
 end
 
 to adjust-speed
-    let turtles-ahead other turtles in-cone 1.1 70
+    let turtles-ahead other cars in-cone 1.1 70
     ifelse any? turtles-ahead with [ (heading + [heading] of myself) mod 180 = 90 ] [
       set speed 0
     ] [
@@ -79,6 +93,7 @@ end
 
 to setup
   clear-all
+  set clockwise ["north" "east" "south" "west"]
   ; Define the direction mapping for turns based on the origin:
   ; For each entry: [origin-direction, left-turn, straight, right-turn]
   ; This helps determine goal directions for turning agents.
@@ -91,10 +106,10 @@ to setup
   ]
   setup-world
 
-  set-default-shape turtles "car top"
-  create-turtles number-of-cars [
+  set-default-shape cars "car top"
+  create-cars number-of-cars [
     set size 1.5
-    let road-location one-of road with [ not any? turtles-on self]
+    let road-location one-of road with [ not any? cars-on self]
     setxy ([ pxcor ] of road-location) ([ pycor ] of road-location)
     set current-direction [direction] of road-location
     if current-direction = "north" [ set heading 0   ]
@@ -137,6 +152,57 @@ to setup-world
     set wait-count 1
     set pcolor yellow
   ]
+  let reps patches with
+    [ pcolor = yellow and
+      (patch-at  1  0 != nobody and [pcolor] of patch-at  1  0 = yellow) and
+      (patch-at  0 -1 != nobody and [pcolor] of patch-at  0 -1 = yellow) and
+      (patch-at  1 -1 != nobody and [pcolor] of patch-at  1 -1 = yellow) ]
+  let sorted-reps sort-by
+  [[a b] ->
+     ([pycor] of a > [pycor] of b) or
+     (([pycor] of a = [pycor] of b) and ([pxcor] of a < [pxcor] of b))
+  ]
+  reps
+      ;; ↑ notice we name the args a,b explicitly instead of ?1/?2
+
+  ;; 5. Get grid coordinates for numbering
+  let cols sort remove-duplicates [pxcor] of reps
+  let rows reverse sort remove-duplicates [pycor] of reps
+  let ncols length cols
+  let id-counter 0
+
+  ;; 6. Create one junction agent per 2×2 intersection
+  foreach sorted-reps [ rep ->
+    set id-counter id-counter + 1
+    let cx ([pxcor] of rep) + 0.5
+    let cy ([pycor] of rep) - 0.5
+
+    create-junctions 1 [
+      setxy cx cy
+      set shape "circle"
+      set size 0.6
+      set color black
+      set label id-counter
+      set label-color white
+      set id id-counter
+      set qN (list) set qE (list) set qS (list) set qW (list)
+      set crossing-now (list)
+    ]
+
+    ;; Assign the same ID to the four yellow patches
+    let patchE  [patch-at 1  0] of rep
+    let patchS  [patch-at 0 -1] of rep
+    let patchSE [patch-at 1 -1] of rep
+
+    ask (patch-set rep patchE patchS patchSE) [
+      set intersection-id id-counter
+      set intersection-of one-of junctions with [id = id-counter]
+      set plabel intersection-id
+      set plabel-color black
+    ]
+
+  ]
+
 end
 
 
