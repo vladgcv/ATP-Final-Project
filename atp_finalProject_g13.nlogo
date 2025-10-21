@@ -11,7 +11,6 @@ cars-own [
   speed
   goal-speed
   travel-time
-  goal
   next-turn
   brand
   next-intersection
@@ -20,6 +19,7 @@ cars-own [
   arrival-time ; tick at which we reached stop-line
   enqueued?
   observed?
+  at-stopline?
 ]
 
 globals [
@@ -39,36 +39,64 @@ patches-own [
 ]
 
 to go
-  ask cars [
-    if patch-here = goal [
-      set goal one-of patches with [pcolor = white]
-    ]
+  ; free driving for cars that are not queued
+  ask cars with [not enqueued?] [
     adjust-speed
-    recolor-agent
-    forward speed
+
+    ;; stop-line detection & enqueue
+    let ahead1 patch-ahead 1
+    if ahead1 != nobody and [stopline?] of ahead1 [
+      set speed 0
+      if not at-stopline? [
+        set at-stopline? true
+        set arrival-time ticks
+        enqueue-self
+      ]
+    ]
+
+    ;; --- ROAD GUARD: only move if next patch is road or intersection ---
+    let ahead patch-ahead 1
+    ifelse ahead != nobody and ([pcolor] of ahead = white or [pcolor] of ahead = yellow) [
+      fd speed
+    ] [
+      set speed 0
+    ]
   ]
+
+
+  ; junction scheduling
+  ask junctions [ release-cars ]
+
   tick
 end
 
+; =========================
+; DRIVING / SPEED
+; =========================
+
 to adjust-speed
-    let turtles-ahead other cars in-cone 1.1 70
-    ifelse any? turtles-ahead with [ (heading + [heading] of myself) mod 180 = 90 ] [
-      set speed 0
-    ] [
-      set turtles-ahead turtles-ahead with [ heading = [heading] of myself ]
-      ifelse any? turtles-ahead [
-        set speed min list speed ([speed] of one-of turtles-ahead)
-        ifelse speed <= slowdown-overshoot [
-          set speed 0
-        ] [
-          set speed speed - slowdown-overshoot
-        ]
+  let turtles-ahead other cars in-cone 1.6 70
+  ifelse any? turtles-ahead with [ (heading + [heading] of myself) mod 180 = 90 ] [
+    set speed 0
+    let last-turtle one-of turtles-ahead with [(heading + [heading] of myself) mod 180 = 90]
+    if [enqueued?] of last-turtle [
+      enqueue-self
+    ]
+  ] [
+    set turtles-ahead turtles-ahead with [ heading = [heading] of myself ]
+    ifelse any? turtles-ahead [
+      set speed min list speed ([speed] of one-of turtles-ahead)
+      ifelse speed <= slowdown-overshoot [
+        set speed 0
       ] [
-        if speed < goal-speed [
-          set speed min list (speed + acceleration) goal-speed
-        ]
+        set speed speed - slowdown-overshoot
+      ]
+    ] [
+      if speed < goal-speed [
+        set speed min list (speed + acceleration) goal-speed
       ]
     ]
+  ]
 end
 
 to recolor-agent
@@ -120,7 +148,12 @@ to setup
     set speed 0.7
     set color blue
     set travel-time 0
-    set goal one-of patches with [pcolor = white]
+    ifelse [stopline?] of patch-ahead 1 [
+      set at-stopline? true
+    ][
+      set at-stopline? false
+    ]
+    set next-turn one-of ["left" "right" "straight"]
   ]
   reset-ticks
 end
@@ -197,15 +230,227 @@ to setup-world
     ask (patch-set rep patchE patchS patchSE) [
       set intersection-id id-counter
       set intersection-of one-of junctions with [id = id-counter]
-      set plabel intersection-id
-      set plabel-color black
     ]
-
+    ask patches with [
+      pcolor = white and any? neighbors4 with [pcolor = yellow]
+    ] [
+      set stopline? true
+      set intersection-id id-counter
+      set intersection-of one-of junctions with [id = id-counter]
+    ]
   ]
+end
 
+; =========================
+; QUEUING + PRECEDENCE
+; =========================
+
+to enqueue-self  ;; car proc
+  let j [intersection-of] of patch-ahead 1
+  if j = nobody [
+    ; fallback: pick junction of the nearest yellow in front
+    let a patch-ahead 2
+    if a != nobody and [pcolor] of a = yellow [
+      let jid [intersection-id] of a
+      set j one-of junctions with [id = jid]
+    ]
+  ]
+  if j != nobody [
+    let app approach-of self
+    ask j [
+      if app = "N" [ set qN lput myself qN ]
+      if app = "E" [ set qE lput myself qE ]
+      if app = "S" [ set qS lput myself qS ]
+      if app = "W" [ set qW lput myself qW ]
+    ]
+    set enqueued? true
+    set observed? false
+  ]
+end
+
+to release-cars  ;; junction proc
+  ;; collect one front-runner per queue into an AGENTSET
+  let cands no-turtles
+  if not empty? qN [ set cands (turtle-set cands first qN) ]
+  if not empty? qE [ set cands (turtle-set cands first qE) ]
+  if not empty? qS [ set cands (turtle-set cands first qS) ]
+  if not empty? qW [ set cands (turtle-set cands first qW) ]
+  if not any? cands [ stop ]
+
+  ;; observation: must have waited at least 1 tick
+  set cands cands with [ observed? or ticks > arrival-time ]
+  if not any? cands [ stop ]
+
+  ;; precedence: earliest arrival
+  let earliest min [arrival-time] of cands
+  let earliest-cands cands with [ arrival-time = earliest ]
+
+  ;; left-turn yields to oncoming straight/right + right-hand tie-break
+  let filtered  earliest-cands with [ not yields-by-left-turn? self earliest-cands ]
+  let filtered2 filtered       with [ not loses-right-rule?    self earliest-cands ]
+
+  let pick nobody
+  if any? filtered2 [ set pick one-of filtered2 ]
+  if pick = nobody [ set pick one-of earliest-cands ]  ;; fallback
+
+  if pick != nobody [
+    ;; optional: allow one compatible second car
+    let others cands with [ self != pick and arrival-time <= [arrival-time] of pick ]
+    let compat others with [
+      not paths-conflict? approach-of pick [next-turn] of pick approach-of self [next-turn] of self
+      and not yields-by-left-turn? self (turtle-set pick)
+      and not loses-right-rule?    self (turtle-set pick)
+    ]
+    do-release pick
+    if any? compat [ do-release one-of compat ]
+  ]
 end
 
 
+to do-release [c]  ;; junction proc
+  let app approach-of c
+  if app = "N" [ set qN but-first qN ]
+  if app = "E" [ set qE but-first qE ]
+  if app = "S" [ set qS but-first qS ]
+  if app = "W" [ set qW but-first qW ]
+
+  ask c [
+    set observed? true
+    set enqueued? false
+    set at-stopline? false
+    set speed goal-speed
+    fd 2
+
+    ;; update direction after turn (decided at enqueue)
+    set current-direction next-direction current-direction next-turn
+    if current-direction = "north" [ set heading 0   ]
+    if current-direction = "east"  [ set heading 90  ]
+    if current-direction = "south" [ set heading 180 ]
+    if current-direction = "west"  [ set heading 270 ]
+
+    ;; cross the intersection (~3 patches)
+    fd 2
+
+    set arrival-time -1
+  ]
+end
+
+
+; =========================
+; RULE HELPERS
+; =========================
+
+to-report next-direction [from-dir turn]
+  let cw ["north" "east" "south" "west"]
+  let i position from-dir cw
+  if i = false [ set i 0 ]  ;; fallback if from-dir is unknown
+
+  if turn = "left"     [ report item ((i + 1) mod 4) cw ]
+  if turn = "straight" [ report item ((i + 2) mod 4) cw ]
+  if turn = "right"    [ report item ((i + 3) mod 4) cw ]
+  report item i cw     ;; fallback: keep direction
+end
+
+
+; Map a heading (0,90,180,270-ish) to a cardinal string
+to-report cardinal-from-heading [h]
+  let ang (round (h / 90)) mod 4
+  report item ang ["north" "east" "south" "west"]  ; 0:N,1:E,2:S,3:W
+end
+
+; Approach is the side the car is COMING FROM relative to the junction
+; (opposite of the car's movement direction)
+to-report approach-of [c]
+  ;; 1) preferred: use the car's current-direction if valid
+  let d [current-direction] of c
+  if member? d ["north" "east" "south" "west"] [
+    if d = "north" [ report "S" ]
+    if d = "east"  [ report "W" ]
+    if d = "south" [ report "N" ]
+    if d = "west"  [ report "E" ]
+  ]
+
+  ;; 2) fallback: if on a road (white), use the patch lane direction
+  let p [patch-here] of c
+  if [pcolor] of p = white [
+    let p-d [direction] of p
+    if member? p-d ["north" "east" "south" "west"] [
+      if p-d = "north" [ report "S" ]
+      if p-d = "east"  [ report "W" ]
+      if p-d = "south" [ report "N" ]
+      if p-d = "west"  [ report "E" ]
+    ]
+  ]
+
+  ;; 3) last resort: infer from heading (nearest 90°)
+  let dh cardinal-from-heading [heading] of c
+  if dh = "north" [ report "S" ]
+  if dh = "east"  [ report "W" ]
+  if dh = "south" [ report "N" ]
+  if dh = "west"  [ report "E" ]
+
+  ;; safety net: never leave without reporting
+  report "N"
+end
+
+to-report opposite [a]
+  if a = "N" [ report "S" ]
+  if a = "E" [ report "W" ]
+  if a = "S" [ report "N" ]
+  if a = "W" [ report "E" ]
+end
+
+to-report right-of [a]
+  if a = "N" [ report "E" ]
+  if a = "E" [ report "S" ]
+  if a = "S" [ report "W" ]
+  if a = "W" [ report "N" ]
+end
+
+; left-turn yields to oncoming straight/right
+to-report yields-by-left-turn? [c candidates]
+  let my-app approach-of c
+  let my-turn [next-turn] of c
+  if my-turn != "left" [ report false ]
+  report any? candidates with [
+    approach-of self = opposite my-app and
+    ([next-turn] of self = "straight" or [next-turn] of self = "right")
+  ]
+end
+
+; same-arrival tie → yield to the right
+to-report loses-right-rule? [c candidates]
+  let my-app approach-of c
+  let my-arr [arrival-time] of c
+  report any? candidates with [
+    [arrival-time] of self = my-arr and approach-of self = right-of my-app
+  ]
+end
+
+; geometric conflict approximation for a 4-way single lane
+to-report paths-conflict? [a-approach a-turn b-approach b-turn]
+  if a-approach = b-approach [ report true ]
+  let opp? (b-approach = opposite a-approach)
+  let adj-right? (b-approach = right-of a-approach)
+  let adj-left?  (a-approach = right-of b-approach)
+
+  if opp? [
+    if (a-turn = "straight" and b-turn = "straight") [ report true ]
+    if (a-turn = "left" and (b-turn = "straight" or b-turn = "right")) [ report true ]
+    if (b-turn = "left" and (a-turn = "straight" or a-turn = "right")) [ report true ]
+    report false
+  ]
+
+  if adj-right? or adj-left? [
+    if (a-turn = "straight" and b-turn = "straight") [ report true ]
+    if (a-turn = "right" and b-turn = "straight" and b-approach = right-of a-approach) [ report true ]
+    if (b-turn = "right" and a-turn = "straight" and a-approach = right-of b-approach) [ report true ]
+    if (a-turn = "left" and not (b-turn = "right" and b-approach = right-of a-approach)) [ report true ]
+    if (b-turn = "left" and not (a-turn = "right" and a-approach = right-of b-approach)) [ report true ]
+  ]
+
+  report false
+end
 @#$#@#$#@
 GRAPHICS-WINDOW
 210
@@ -284,7 +529,7 @@ false
 false
 "set-plot-x-range 0 1.1\nset-plot-y-range 0 ( number-of-cars )\nset-histogram-num-bars 20" ""
 PENS
-"default" 1.0 1 -16777216 true "" "histogram [speed] of turtles"
+"default" 1.0 1 -16777216 true "" "histogram [speed] of cars"
 
 SLIDER
 23
@@ -295,7 +540,7 @@ number-of-cars
 number-of-cars
 0
 300
-110.0
+120.0
 10
 1
 NIL
