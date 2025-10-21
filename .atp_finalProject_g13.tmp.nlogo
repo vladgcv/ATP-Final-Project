@@ -11,7 +11,6 @@ cars-own [
   speed
   goal-speed
   travel-time
-  goal
   next-turn
   brand
   next-intersection
@@ -20,6 +19,7 @@ cars-own [
   arrival-time ; tick at which we reached stop-line
   enqueued?
   observed?
+  at-stopline?
 ]
 
 globals [
@@ -39,36 +39,52 @@ patches-own [
 ]
 
 to go
-  ask cars [
+  ask cars with [not enqueued?] [
     if patch-here = goal [
       set goal one-of patches with [pcolor = white]
+      plan-route goal
     ]
+    ifelse route != [] [
+      let here-idx position patch-here route
+      if here-idx != false [ set route-idx here-idx ]
+    ][
+      ; route vanished → re-plan
+      plan-route goal
+    ]
+
     adjust-speed
-    recolor-agent
     forward speed
   ]
   tick
 end
 
+; =========================
+; DRIVING / SPEED
+; =========================
+
 to adjust-speed
-    let turtles-ahead other cars in-cone 1.1 70
-    ifelse any? turtles-ahead with [ (heading + [heading] of myself) mod 180 = 90 ] [
-      set speed 0
-    ] [
-      set turtles-ahead turtles-ahead with [ heading = [heading] of myself ]
-      ifelse any? turtles-ahead [
-        set speed min list speed ([speed] of one-of turtles-ahead)
-        ifelse speed <= slowdown-overshoot [
-          set speed 0
-        ] [
-          set speed speed - slowdown-overshoot
-        ]
+  let turtles-ahead other cars in-cone 1.6 70
+  ifelse any? turtles-ahead with [ (heading + [heading] of myself) mod 180 = 90 ] [
+    set speed 0
+    let last-turtle one-of turtles-ahead with [(heading + [heading] of myself) mod 180 = 90]
+    if [enqueued?] of last-turtle [
+      enqueue-self
+    ]
+  ] [
+    set turtles-ahead turtles-ahead with [ heading = [heading] of myself ]
+    ifelse any? turtles-ahead [
+      set speed min list speed ([speed] of one-of turtles-ahead)
+      ifelse speed <= slowdown-overshoot [
+        set speed 0
       ] [
-        if speed < goal-speed [
-          set speed min list (speed + acceleration) goal-speed
-        ]
+        set speed speed - slowdown-overshoot
+      ]
+    ] [
+      if speed < goal-speed [
+        set speed min list (speed + acceleration) goal-speed
       ]
     ]
+  ]
 end
 
 to recolor-agent
@@ -121,6 +137,7 @@ to setup
     set color blue
     set travel-time 0
     set goal one-of patches with [pcolor = white]
+    plan-route goal
   ]
   reset-ticks
 end
@@ -196,13 +213,68 @@ to setup-world
     ask (patch-set rep patchE patchS patchSE) [
       set intersection-id id-counter
       set intersection-of one-of junctions with [id = id-counter]
-      set plabel intersection-id
-      set plabel-color black
+    ]
+    ask patches with [
+      pcolor = white and any? neighbors4 with [pcolor = yellow]
+    ] [
+      set stopline? true
     ]
 
   ]
-
 end
+
+; ---- SHORTEST PATH ON THE ROAD GRID (BFS = Dijkstra on unit weights) ----
+to-report shortest-path [start dest]  ;; reports list of patches from start→goal
+  if start = dest [ report (list start) ]
+  let visited (list start)
+  let queue (list (list start))
+  while [ not empty? queue ] [
+    let path first queue
+    set queue but-first queue
+    let last-patch last path
+    let nbrs [neighbors4] of last-patch with [pcolor = white ]
+    foreach sort nbrs [ n ->
+      if not member? n visited [
+        let newpath sentence path n
+        if n = goal [ report newpath ]
+        set visited lput n visited
+        set queue lput newpath queue
+      ]
+    ]
+  ]
+  report []  ;; no route (shouldn’t happen if the grid is connected)
+end
+
+; ---- DIRECTIONS & TURN COMPUTATION ----
+to-report step-direction [from dest]  ;; cardinal direction of the step from→to
+  let dist-x ([pxcor] of dest) - ([pxcor] of from)
+  let dist-y ([pycor] of dest) - ([pycor] of from)
+  if dist-x =  1 [ report "east"  ]
+  if dist-x = -1 [ report "west"  ]
+  if dist-y =  1 [ report "north" ]
+  if dist-y = -1 [ report "south" ]
+  report "unknown"
+end
+
+to-report turn-from-to [dir1 dir2]  ;; turn needed to change dir1→dir2
+  let cw ["north" "east" "south" "west"]
+  let i position dir1 cw
+  let j position dir2 cw
+  let d (j - i) mod 4
+  if d = 0 [ report "straight" ]
+  if d = 1 [ report "right"    ]
+  if d = 3 [ report "left"     ]
+  report "straight"
+end
+
+to plan-route [g]  ;; car proc: set route & route-idx towards goal g
+  set goal g
+  set route shortest-path patch-here goal
+  set route-idx position patch-here route
+  if route-idx = false [ set route-idx 0 ]  ;; safety
+end
+
+
 
 
 @#$#@#$#@
@@ -283,7 +355,7 @@ false
 false
 "set-plot-x-range 0 1.1\nset-plot-y-range 0 ( number-of-cars )\nset-histogram-num-bars 20" ""
 PENS
-"default" 1.0 1 -16777216 true "" "histogram [speed] of turtles"
+"default" 1.0 1 -16777216 true "" "histogram [speed] of cars"
 
 SLIDER
 23
@@ -294,7 +366,7 @@ number-of-cars
 number-of-cars
 0
 300
-110.0
+120.0
 10
 1
 NIL
