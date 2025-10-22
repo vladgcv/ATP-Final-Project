@@ -204,7 +204,7 @@ to adjust-speed
   ]
 end
 
-to go
+to cars-on-the-road
   ask cars [
     adjust-speed
 
@@ -232,12 +232,23 @@ to go
       set speed 0
     ]
   ]
+end
 
+to cars-in-junctions
   ask junctions [
 
   ]
+end
 
-  tick
+to go
+
+  cars-on-the-road
+
+  ; tick
+
+  cars-in-junctions
+
+  ; tick
 end
 
 to-report get-next-turn [curr-dir next-dir]
