@@ -2,90 +2,191 @@ breed [cars car]
 breed [junctions junction]
 
 junctions-own [
+  ; id of junction
   id
-  qN qE qS qW
+
+  ; the care crossing righ now
   crossing-now
 ]
 
 cars-own [
+  ; speed of the car
   speed
+
+  ; max speed/aim speed
   goal-speed
-  travel-time
-  next-turn
-  brand
+
+  ; north, south, east, west
+  current-direction
+
+  ; id of next intersection
   next-intersection
-  distance-to-next-intersection
-  current-direction ; north, south, east, west
-  arrival-time ; tick at which we reached stop-line
-  enqueued?
-  observed?
-  at-stopline?
+
+  ; what direction they are going to switch to
+  next-direction
+
+  ; tick at which the car reached the stopline
+  arrival-time
+
+  ; boolean showing if the car is waiting at the intersection or not
+  at-junction?
 ]
 
 globals [
-  road
-  intersection
-  direction-map
-  clockwise ; ["north" "east" "south" "west"] helper
+  ; collection of roads on the map
+  roads
+
+  ; ["north" "east" "south" "west"] helper
+  clockwise
+
+  ; acceleration of cars
+  acceleration
+
+  ;
+  slowdown-overshoot
 ]
 
 patches-own [
-  wait-times
-  wait-count
-  direction ; the direction of the road (north, south, east, west)
-  stopline? ; true at the 4 patches around each intersection
-  intersection-id
-  intersection-of
+  ; the direction of the road (north/south/east/west/NONE)
+  direction
+
+  ; true at the 4 patches which make up a junction
+  junction-on-patch?
 ]
 
-to go
-  ; free driving for cars that are not queued
-  ask cars with [not enqueued?] [
-    adjust-speed
+; =========================
+; SETUP
+; =========================
 
-    ;; stop-line detection & enqueue
-    let ahead1 patch-ahead 1
-    if ahead1 != nobody and [stopline?] of ahead1 [
-      set speed 0
-      if not at-stopline? [
-        set at-stopline? true
-        set arrival-time ticks
-        enqueue-self
-      ]
+to draw-map
+  ask patches [
+    set pcolor black
+
+    ; draw the ROADS
+    if (pycor mod 20 = 0) [
+      set pcolor white
+      set direction "east"
+    ]
+    if ((pycor - 1) mod 20 = 0) [
+      set pcolor white
+      set direction "west"
+    ]
+    if (pxcor mod 20 = 0) [
+      set pcolor white
+      set direction "south"
+    ]
+    if ((pxcor - 1) mod 20 = 0) [
+      set pcolor white
+      set direction "north"
     ]
 
-    ;; --- ROAD GUARD: only move if next patch is road or intersection ---
-    let ahead patch-ahead 1
-    ifelse ahead != nobody and ([pcolor] of ahead = white or [pcolor] of ahead = yellow) [
-      fd speed
-    ] [
-      set speed 0
+    ; draw the JUNCTIONS
+    if (((pycor mod 20 = 0) or ((pycor - 1) mod 20 = 0)) and ((pxcor mod 20 = 0) or ((pxcor - 1) mod 20 = 0))) [
+      ; soft yellow
+      set pcolor yellow
+      set direction "NONE"
+      set junction-on-patch? true
     ]
   ]
+end
 
+to create-roads-junctions
+  ;;; define ROADS
+  set roads patches with [pcolor = white]
 
-  ; junction scheduling
-  ask junctions [ release-cars ]
+  ;;; get yellow patches
+  let candidate-patches patches with [
+    pcolor = yellow and
+    (pxcor mod 20 = 0) and
+    ((pycor - 1) mod 20 = 0)
+  ]
 
-  tick
+  ;;; initialize JUNCTIONS
+  ask candidate-patches [
+    sprout-junctions 1 [
+      set color yellow
+      set shape "square"
+      set size 0.75
+      setxy (pxcor + 0.5) (pycor - 0.5) ; in order to center the JUNCTION agent
+      set label who
+      set label-color black
+      set crossing-now nobody
+    ]
+
+    ;;; draw patches AROUND JUNCTIONS
+    ask patches with [
+      pcolor = white and any? neighbors4 with [pcolor = yellow]
+    ] [
+      set pcolor orange
+    ]
+  ]
+end
+
+to place-cars
+
+  set-default-shape cars "car top"
+
+  create-cars number-of-cars [
+    set color blue
+    set size 0.75
+    set arrival-time -1
+
+    ;;; SPEED
+    set goal-speed 0.7
+    set speed 0.7
+
+    ;;; place cars on road, but not on the intersections
+    let road-location one-of roads with [
+      not any? cars-on self and
+      pcolor != yellow and
+      pcolor != orange
+    ]
+    setxy ([ pxcor ] of road-location) ([ pycor ] of road-location)
+
+    ;;; adjust their direction
+    set current-direction [direction] of road-location
+    if current-direction = "north" [ set heading 0   ]
+    if current-direction = "east"  [ set heading 90  ]
+    if current-direction = "south" [ set heading 180 ]
+    if current-direction = "west"  [ set heading 270 ]
+
+    set at-junction? false
+
+    let possible-directions (remove current-direction clockwise)
+    set next-direction one-of possible-directions
+  ]
+end
+
+to setup
+  clear-all
+  set clockwise ["north" "east" "south" "west"]
+
+  ;;; these functions are up here ^
+  draw-map
+  create-roads-junctions
+  place-cars
+
+  set acceleration 0.2
+  set slowdown-overshoot 0.4
+
+  reset-ticks
 end
 
 ; =========================
-; DRIVING / SPEED
+; GO + MOVEMENT
 ; =========================
 
 to adjust-speed
-  let turtles-ahead other cars in-cone 1.6 70
-  ifelse any? turtles-ahead with [ (heading + [heading] of myself) mod 180 = 90 ] [
+  let cars-ahead other cars in-cone 1.6 70
+
+  ; IF other cars in front of me are orthogonally placed in front of me, reduce speed
+  ifelse any? cars-ahead with [ (heading + [heading] of myself) mod 180 = 90 ] [
     set speed 0
-    let last-turtle one-of turtles-ahead with [(heading + [heading] of myself) mod 180 = 90]
-    if [enqueued?] of last-turtle [
-      enqueue-self
-    ]
   ] [
-    set turtles-ahead turtles-ahead with [ heading = [heading] of myself ]
-    ifelse any? turtles-ahead [
-      set speed min list speed ([speed] of one-of turtles-ahead)
+    set cars-ahead cars-ahead with [ heading = [heading] of myself ]
+    ifelse any? cars-ahead [
+      set speed min list speed ([speed] of one-of cars-ahead)
+
       ifelse speed <= slowdown-overshoot [
         set speed 0
       ] [
@@ -99,349 +200,28 @@ to adjust-speed
   ]
 end
 
+to go
+  ask cars [
+    adjust-speed
 
+    let ahead1 patch-ahead 1
 
-
-to setup
-  clear-all
-  set clockwise ["north" "east" "south" "west"]
-  ; Define the direction mapping for turns based on the origin:
-  ; For each entry: [origin-direction, left-turn, straight, right-turn]
-  ; This helps determine goal directions for turning agents.
-  set direction-map [
-    ; origin  →   left     straight   right
-    ["north"   "east"     "south"    "west"]
-    ["east"    "south"    "west"     "north"]
-    ["south"   "west"     "north"    "east"]
-    ["west"    "north"    "east"     "south"]
-  ]
-  setup-world
-
-  set-default-shape cars "car top"
-  create-cars number-of-cars [
-    set size 1.5
-    set enqueued? false
-    set observed? false
-    set arrival-time -1
-    let road-location one-of road with [
-      not any? cars-on self
-      pcolor != yello
-    ]
-    setxy ([ pxcor ] of road-location) ([ pycor ] of road-location)
-    set current-direction [direction] of road-location
-    if current-direction = "north" [ set heading 0   ]
-    if current-direction = "east"  [ set heading 90  ]
-    if current-direction = "south" [ set heading 180 ]
-    if current-direction = "west"  [ set heading 270 ]
-    set goal-speed 0.7
-    set speed 0.7
-    set color blue
-    set travel-time 0
-    ifelse [stopline?] of patch-ahead 1 [
-      set at-stopline? true
-    ][
-      set at-stopline? false
-    ]
-    set next-turn one-of ["left" "right" "straight"]
-  ]
-  reset-ticks
-end
-
-to setup-world
-  ask patches [
-    set pcolor black
-    set stopline? false
-    set intersection-id 0
-    set intersection-of nobody
-    if (pycor mod 20 = 0 or pycor = 1 or pycor = 21 or pycor = -19) [
-      set pcolor white
-      set direction "east"
-    ]
-    if (pycor = 1 or pycor = 21 or pycor = -19) [
-      set pcolor white
-      set direction "west"
-    ]
-    if (pxcor mod 20 = 0 or pxcor = 1 or pxcor = 21 or pxcor = -19) [
-      set pcolor white
-      set direction "south"
-    ]
-    if (pxcor = 1 or pxcor = 21 or pxcor = -19) [
-      set pcolor white
-      set direction "north"
-    ]
-  ]
-  set road patches with [pcolor = white]
-  set intersection patches with [all? neighbors4 [pcolor = white]]
-  ask intersection [
-    set wait-times 0
-    set wait-count 1
-    set pcolor yellow
-  ]
-  let reps patches with
-    [ pcolor = yellow and
-      (patch-at  1  0 != nobody and [pcolor] of patch-at  1  0 = yellow) and
-      (patch-at  0 -1 != nobody and [pcolor] of patch-at  0 -1 = yellow) and
-      (patch-at  1 -1 != nobody and [pcolor] of patch-at  1 -1 = yellow) ]
-  let sorted-reps sort-by
-  [[a b] ->
-     ([pycor] of a > [pycor] of b) or
-     (([pycor] of a = [pycor] of b) and ([pxcor] of a < [pxcor] of b))
-  ]
-  reps
-
-  ;; Get grid coordinates for numbering
-  let cols sort remove-duplicates [pxcor] of reps
-  let rows reverse sort remove-duplicates [pycor] of reps
-  let ncols length cols
-  let id-counter 0
-
-  ;; Create one junction agent per 2×2 intersection
-  foreach sorted-reps [ rep ->
-    set id-counter id-counter + 1
-    let cx ([pxcor] of rep) + 0.5
-    let cy ([pycor] of rep) - 0.5
-
-    create-junctions 1 [
-      setxy cx cy
-      set shape "circle"
-      set size 0.6
-      set color black
-      set label id-counter
-      set label-color white
-      set id id-counter
-      set qN (list) set qE (list) set qS (list) set qW (list)
-      set crossing-now (list)
+    ;;; STOP at JUNCTION
+    if ahead1 != nobody and [junction-on-patch?] of ahead1 [
+      set speed 0
+      if not at-junction? [
+        set at-junction? true
+        set arrival-time ticks
+      ]
     ]
 
-    ;; Assign the same ID to the four yellow patches
-    let patchE  [patch-at 1  0] of rep
-    let patchS  [patch-at 0 -1] of rep
-    let patchSE [patch-at 1 -1] of rep
-
-    ask (patch-set rep patchE patchS patchSE) [
-      set intersection-id id-counter
-      set intersection-of one-of junctions with [id = id-counter]
-    ]
-    ask patches with [
-      pcolor = white and any? neighbors4 with [pcolor = yellow]
+    ;;; GUARD: only move if next patch is ROAD/JUNCTION
+    ifelse ahead1 != nobody and ([pcolor] of ahead1 = white or [pcolor] of ahead1 = yellow) [
+      fd speed
     ] [
-      set pcolor orange
-      set stopline? true
-      set intersection-id id-counter
-      set intersection-of one-of junctions with [id = id-counter]
+      set speed 0
     ]
   ]
-end
-
-; =========================
-; QUEUING + PRECEDENCE
-; =========================
-
-to enqueue-self  ;; car proc
-  let j [intersection-of] of patch-ahead 1
-  if j = nobody [
-    ; fallback: pick junction of the nearest yellow in front
-    let a patch-ahead 2
-    if a != nobody and [pcolor] of a = yellow [
-      let jid [intersection-id] of a
-      set j one-of junctions with [id = jid]
-    ]
-  ]
-  if j != nobody [
-    let app approach-of self
-    ask j [
-      if app = "N" [ set qN lput myself qN ]
-      if app = "E" [ set qE lput myself qE ]
-      if app = "S" [ set qS lput myself qS ]
-      if app = "W" [ set qW lput myself qW ]
-    ]
-    set enqueued? true
-    set observed? false
-  ]
-end
-
-to release-cars  ;; junction proc
-  ;; collect one front-runner per queue into an AGENTSET
-  let cands no-turtles
-  if not empty? qN [ set cands (turtle-set cands first qN) ]
-  if not empty? qE [ set cands (turtle-set cands first qE) ]
-  if not empty? qS [ set cands (turtle-set cands first qS) ]
-  if not empty? qW [ set cands (turtle-set cands first qW) ]
-  if not any? cands [ stop ]
-
-  ;; observation: must have waited at least 1 tick
-  set cands cands with [ observed? or ticks > arrival-time ]
-  if not any? cands [ stop ]
-
-  ;; precedence: earliest arrival
-  let earliest min [arrival-time] of cands
-  let earliest-cands cands with [ arrival-time = earliest ]
-
-  ;; left-turn yields to oncoming straight/right + right-hand tie-break
-  let filtered  earliest-cands with [ not yields-by-left-turn? self earliest-cands ]
-  let filtered2 filtered       with [ not loses-right-rule?    self earliest-cands ]
-
-  let pick nobody
-  if any? filtered2 [ set pick one-of filtered2 ]
-  if pick = nobody [ set pick one-of earliest-cands ]  ;; fallback
-
-  if pick != nobody [
-    ;; optional: allow one compatible second car
-    let others cands with [ self != pick and arrival-time <= [arrival-time] of pick ]
-    let compat others with [
-      not paths-conflict? approach-of pick [next-turn] of pick approach-of self [next-turn] of self
-      and not yields-by-left-turn? self (turtle-set pick)
-      and not loses-right-rule?    self (turtle-set pick)
-    ]
-    do-release pick
-    if any? compat [ do-release one-of compat ]
-  ]
-end
-
-
-to do-release [c]  ;; junction proc
-  let app approach-of c
-  if app = "N" [ set qN but-first qN ]
-  if app = "E" [ set qE but-first qE ]
-  if app = "S" [ set qS but-first qS ]
-  if app = "W" [ set qW but-first qW ]
-
-  ask c [
-    set observed? true
-    set enqueued? false
-    set at-stopline? false
-    set speed goal-speed
-    fd 2
-
-    ;; update direction after turn (decided at enqueue)
-    set current-direction next-direction current-direction next-turn
-    if current-direction = "north" [ set heading 0   ]
-    if current-direction = "east"  [ set heading 90  ]
-    if current-direction = "south" [ set heading 180 ]
-    if current-direction = "west"  [ set heading 270 ]
-
-    ;; cross the intersection (~3 patches)
-    fd 2
-
-    set arrival-time -1
-  ]
-end
-
-
-; =========================
-; RULE HELPERS
-; =========================
-
-to-report next-direction [from-dir turn]
-  let cw ["north" "east" "south" "west"]
-  let i position from-dir cw
-  if i = false [ set i 0 ]  ;; fallback if from-dir is unknown
-
-  if turn = "left"     [ report item ((i + 1) mod 4) cw ]
-  if turn = "straight" [ report item ((i + 2) mod 4) cw ]
-  if turn = "right"    [ report item ((i + 3) mod 4) cw ]
-  report item i cw     ;; fallback: keep direction
-end
-
-
-; Map a heading (0,90,180,270-ish) to a cardinal string
-to-report cardinal-from-heading [h]
-  let ang (round (h / 90)) mod 4
-  report item ang ["north" "east" "south" "west"]  ; 0:N,1:E,2:S,3:W
-end
-
-; Approach is the side the car is COMING FROM relative to the junction
-; (opposite of the car's movement direction)
-to-report approach-of [c]
-  ;; 1) preferred: use the car's current-direction if valid
-  let d [current-direction] of c
-  if member? d ["north" "east" "south" "west"] [
-    if d = "north" [ report "S" ]
-    if d = "east"  [ report "W" ]
-    if d = "south" [ report "N" ]
-    if d = "west"  [ report "E" ]
-  ]
-
-  ;; 2) fallback: if on a road (white), use the patch lane direction
-  let p [patch-here] of c
-  if [pcolor] of p = white [
-    let p-d [direction] of p
-    if member? p-d ["north" "east" "south" "west"] [
-      if p-d = "north" [ report "S" ]
-      if p-d = "east"  [ report "W" ]
-      if p-d = "south" [ report "N" ]
-      if p-d = "west"  [ report "E" ]
-    ]
-  ]
-
-  ;; 3) last resort: infer from heading (nearest 90°)
-  let dh cardinal-from-heading [heading] of c
-  if dh = "north" [ report "S" ]
-  if dh = "east"  [ report "W" ]
-  if dh = "south" [ report "N" ]
-  if dh = "west"  [ report "E" ]
-
-  ;; safety net: never leave without reporting
-  report "N"
-end
-
-to-report opposite [a]
-  if a = "N" [ report "S" ]
-  if a = "E" [ report "W" ]
-  if a = "S" [ report "N" ]
-  if a = "W" [ report "E" ]
-end
-
-to-report right-of [a]
-  if a = "N" [ report "E" ]
-  if a = "E" [ report "S" ]
-  if a = "S" [ report "W" ]
-  if a = "W" [ report "N" ]
-end
-
-; left-turn yields to oncoming straight/right
-to-report yields-by-left-turn? [c candidates]
-  let my-app approach-of c
-  let my-turn [next-turn] of c
-  if my-turn != "left" [ report false ]
-  report any? candidates with [
-    approach-of self = opposite my-app and
-    ([next-turn] of self = "straight" or [next-turn] of self = "right")
-  ]
-end
-
-; same-arrival tie → yield to the right
-to-report loses-right-rule? [c candidates]
-  let my-app approach-of c
-  let my-arr [arrival-time] of c
-  report any? candidates with [
-    [arrival-time] of self = my-arr and approach-of self = right-of my-app
-  ]
-end
-
-; geometric conflict approximation for a 4-way single lane
-to-report paths-conflict? [a-approach a-turn b-approach b-turn]
-  if a-approach = b-approach [ report true ]
-  let opp? (b-approach = opposite a-approach)
-  let adj-right? (b-approach = right-of a-approach)
-  let adj-left?  (a-approach = right-of b-approach)
-
-  if opp? [
-    if (a-turn = "straight" and b-turn = "straight") [ report true ]
-    if (a-turn = "left" and (b-turn = "straight" or b-turn = "right")) [ report true ]
-    if (b-turn = "left" and (a-turn = "straight" or a-turn = "right")) [ report true ]
-    report false
-  ]
-
-  if adj-right? or adj-left? [
-    if (a-turn = "straight" and b-turn = "straight") [ report true ]
-    if (a-turn = "right" and b-turn = "straight" and b-approach = right-of a-approach) [ report true ]
-    if (b-turn = "right" and a-turn = "straight" and a-approach = right-of b-approach) [ report true ]
-    if (a-turn = "left" and not (b-turn = "right" and b-approach = right-of a-approach)) [ report true ]
-    if (b-turn = "left" and not (a-turn = "right" and a-approach = right-of b-approach)) [ report true ]
-  ]
-
-  report false
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
@@ -534,36 +314,6 @@ number-of-cars
 300
 120.0
 10
-1
-NIL
-HORIZONTAL
-
-SLIDER
-22
-64
-194
-97
-acceleration
-acceleration
-0
-0.5
-0.3
-0.05
-1
-NIL
-HORIZONTAL
-
-SLIDER
-22
-107
-194
-140
-slowdown-overshoot
-slowdown-overshoot
-0
-0.5
-0.2
-0.05
 1
 NIL
 HORIZONTAL
