@@ -3,6 +3,7 @@ breed [junctions junction]
 
 junctions-own [
   id
+
   crossing-now
 ]
 
@@ -16,6 +17,7 @@ cars-own [
   distance-to-next-intersection
   current-direction ; north, south, east, west
   arrival-time ; tick at which we reached stop-line
+  enqueued?
   observed?
   at-stopline?
 ]
@@ -52,9 +54,9 @@ to go
       ]
     ]
 
-    ;; --- ROAD GUARD: only move if next patch is road or intersection ---
+    ;; --- ROAD GUARD: only move if next patch is road ---
     let ahead patch-ahead 1
-    ifelse ahead != nobody and ([pcolor] of ahead = white or [pcolor] of ahead = yellow) [
+    ifelse ahead != nobody and ([pcolor] of ahead = white) [
       fd speed
     ] [
       set speed 0
@@ -97,6 +99,9 @@ to adjust-speed
   ]
 end
 
+
+
+
 to setup
   clear-all
   set clockwise ["north" "east" "south" "west"]
@@ -123,6 +128,7 @@ to setup
       pcolor != yellow and
       pcolor != orange
     ]
+
     setxy ([ pxcor ] of road-location) ([ pycor ] of road-location)
     set current-direction [direction] of road-location
     if current-direction = "north" [ set heading 0   ]
@@ -133,6 +139,7 @@ to setup
     set speed 0.7
     set color blue
     set travel-time 0
+    set next-intersection next-junction-from patch-here current-direction
     ifelse [stopline?] of patch-ahead 1 [
       set at-stopline? true
     ][
@@ -166,7 +173,6 @@ to setup-world
       set direction "north"
     ]
   ]
-
   set road patches with [pcolor = white]
   set intersection patches with [all? neighbors4 [pcolor = white]]
   ask intersection [
@@ -206,7 +212,6 @@ to setup-world
       set label id-counter
       set label-color white
       set id id-counter
-;      set qN (list) set qE (list) set qS (list) set qW (list)
       set crossing-now (list)
     ]
 
@@ -237,34 +242,35 @@ end
 to enqueue-self  ;; car proc
   let j [intersection-of] of patch-ahead 1
   if j = nobody [
+
     ; fallback: pick junction of the nearest yellow in front
-    let a patch-ahead 2
-    if a != nobody and [pcolor] of a = yellow [
+    let a patch-ahead 1
+    if a != nobody and [pcolor] of a = orange [
       let jid [intersection-id] of a
       set j one-of junctions with [id = jid]
     ]
   ]
   if j != nobody [
-;    let app approach-of self
-;    ask j [
-;      if app = "N" [ set qN lput myself qN ]
-;      if app = "E" [ set qE lput myself qE ]
-;      if app = "S" [ set qS lput myself qS ]
-;      if app = "W" [ set qW lput myself qW ]
-;    ]
+    let app approach-of self
+    ask j [
+      if app = "N" [ set qN lput myself qN ]
+      if app = "E" [ set qE lput myself qE ]
+      if app = "S" [ set qS lput myself qS ]
+      if app = "W" [ set qW lput myself qW ]
+    ]
     set enqueued? true
     set observed? false
   ]
 end
 
 to release-cars  ;; junction proc
-;  ;; collect one front-runner per queue into an AGENTSET
-;  let cands no-turtles
-;  if not empty? qN [ set cands (turtle-set cands first qN) ]
-;  if not empty? qE [ set cands (turtle-set cands first qE) ]
-;  if not empty? qS [ set cands (turtle-set cands first qS) ]
-;  if not empty? qW [ set cands (turtle-set cands first qW) ]
-;  if not any? cands [ stop ]
+  ;; collect one front-runner per queue into an AGENTSET
+  let cands no-turtles
+  if not empty? qN [ set cands (turtle-set cands first qN) ]
+  if not empty? qE [ set cands (turtle-set cands first qE) ]
+  if not empty? qS [ set cands (turtle-set cands first qS) ]
+  if not empty? qW [ set cands (turtle-set cands first qW) ]
+  if not any? cands [ stop ]
 
   ;; observation: must have waited at least 1 tick
   set cands cands with [ observed? or ticks > arrival-time ]
@@ -295,7 +301,13 @@ to release-cars  ;; junction proc
   ]
 end
 
+
 to do-release [c]  ;; junction proc
+  let app approach-of c
+  if app = "N" [ set qN but-first qN ]
+  if app = "E" [ set qE but-first qE ]
+  if app = "S" [ set qS but-first qS ]
+  if app = "W" [ set qW but-first qW ]
 
   ask c [
     set observed? true
@@ -341,6 +353,46 @@ to do-release [c]  ;; junction proc
     set next-intersection next-junction-from patch-here current-direction
   ]
 end
+
+
+to-report next-junction-from [p dir]
+  ;; Walk forward along dir; return the first junction (intersection-of) we see.
+  ;; Torus-safe: limit steps to one full wrap in that direction.
+
+  let x [pxcor] of p
+  let y [pycor] of p
+
+  ;; step vector
+  let dist-x 0
+  let dist-y 0
+  if dir = "north" [ set dist-y  1 ]
+  if dir = "south" [ set dist-y -1 ]
+  if dir = "east"  [ set dist-x  1 ]
+  if dir = "west"  [ set dist-x -1 ]
+
+  ;; if we're already on a stopline, return its junction immediately
+  if [stopline?] of p or [pcolor] of p = yellow [
+    report [intersection-of] of p
+  ]
+
+  ;; step limit: one full circumference in that axis
+  let limit (ifelse-value (dir = "east" or dir = "west") [ world-width ] [ world-height ])
+
+  let steps 0
+  while [steps < limit] [
+    set x x + dx
+    set y y + dy
+    let q patch x y     ;; wraps automatically on a torus
+    if [stopline?] of q or [pcolor] of q = yellow [
+      report [intersection-of] of q
+    ]
+    set steps steps + 1
+  ]
+
+  ;; nothing found along that lane within one wrap
+  report nobody
+end
+
 
 
 ; =========================
