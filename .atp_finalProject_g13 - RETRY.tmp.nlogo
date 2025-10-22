@@ -5,8 +5,11 @@ junctions-own [
   ; id of junction
   id
 
-  ; the care crossing righ now
+  ; the cars crossing righ now
   crossing-now
+
+  ;car N, S, E, W
+  car-N car-S car-E car-W
 ]
 
 cars-own [
@@ -19,7 +22,7 @@ cars-own [
   ; north, south, east, west
   current-direction
 
-  ; id of next intersection
+  ; next intersection
   next-intersection
 
   ; what direction they are going to switch to
@@ -155,6 +158,7 @@ to place-cars
 
     let possible-directions (remove current-direction clockwise)
     set next-direction one-of possible-directions
+    set next-intersection next-junction-from road-location current-direction
   ]
 end
 
@@ -180,14 +184,13 @@ end
 to adjust-speed
   let cars-ahead other cars in-cone 1.6 70
 
-  ; IF other cars in front of meare orthogonally placed in front of me, reduce speed
+  ; IF other cars in front of me are orthogonally placed in front of me, reduce speed
   ifelse any? cars-ahead with [ (heading + [heading] of myself) mod 180 = 90 ] [
     set speed 0
   ] [
     set cars-ahead cars-ahead with [ heading = [heading] of myself ]
     ifelse any? cars-ahead [
       set speed min list speed ([speed] of one-of cars-ahead)
-
       ifelse speed <= slowdown-overshoot [
         set speed 0
       ] [
@@ -213,6 +216,12 @@ to go
       if not at-junction? [
         set at-junction? true
         set arrival-time ticks
+        ask next-intersection [
+          if current-direction = "north" [ set car-S myself ]
+          if current-direction = "south" [ set car-N myself ]
+          if current-direction = "east" [ set car-W myself ]
+          if current-direction = "west" [ set car-S myself ]
+        ]
       ]
     ]
 
@@ -223,6 +232,58 @@ to go
       set speed 0
     ]
   ]
+
+
+  tick
+end
+
+to-report get-next-turn [curr-dir next-dir]
+  let i1 position curr-dir clockwise
+  let i2 position next-dir clockwise
+  let diff (i1 - i2) mod 4
+
+  if diff = 0 [ report "straight" ]
+  if diff = 1 [ report "right" ]
+  if diff = 3 [ report "left" ]
+end
+
+to-report next-junction-from [p dir]
+  ;; Return the next junction agent in direction `dir` starting from patch `p`.
+
+  let x [pxcor] of p
+  let y [pycor] of p
+
+  ;; step vector
+  let dist-x 0
+  let dist-y 0
+  if dir = "north" [ set dist-y  1 ]
+  if dir = "south" [ set dist-y -1 ]
+  if dir = "east"  [ set dist-x  1 ]
+  if dir = "west"  [ set dist-x -1 ]
+
+  ;; if we're already on a junction patch, return that junction
+  if [junction-on-patch?] of p [
+    report min-one-of junctions [ distance p ]
+  ]
+
+  ;; limit steps to one world wrap on the moving axis
+  let limit (ifelse-value (dir = "east" or dir = "west") [ world-width ] [ world-height ])
+
+  let steps 0
+  while [steps < limit] [
+    set x x + dist-x
+    set y y + dist-y
+    let q patch x y  ;; wraps automatically on torus
+
+    if [junction-on-patch?] of q [
+      report min-one-of junctions [ distance q ]
+    ]
+
+    set steps steps + 1
+  ]
+
+  ;; no junction found along this lane within one wrap
+  report nobody
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
@@ -246,8 +307,8 @@ GRAPHICS-WINDOW
 30
 -30
 30
-0
-0
+1
+1
 1
 ticks
 30.0
