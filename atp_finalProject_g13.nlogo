@@ -3,6 +3,7 @@ breed [junctions junction]
 
 junctions-own [
   id
+  qN qE qS qW
   crossing-now
 ]
 
