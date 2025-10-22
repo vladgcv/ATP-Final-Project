@@ -61,6 +61,7 @@ patches-own [
 to draw-map
   ask patches [
     set pcolor black
+    set junction-on-patch? false
 
     ; draw the ROADS
     if (pycor mod 20 = 0) [
@@ -179,13 +180,14 @@ end
 to adjust-speed
   let cars-ahead other cars in-cone 1.6 70
 
-  ; IF other cars in front of me are orthogonally placed in front of me, reduce speed
+  ; IF other cars are orthogonally placed in front of me, reduce speed
   ifelse any? cars-ahead with [ (heading + [heading] of myself) mod 180 = 90 ] [
     set speed 0
   ] [
     set cars-ahead cars-ahead with [ heading = [heading] of myself ]
     ifelse any? cars-ahead [
       set speed min list speed ([speed] of one-of cars-ahead)
+
       ifelse speed <= slowdown-overshoot [
         set speed 0
       ] [
@@ -221,6 +223,7 @@ to go
       set speed 0
     ]
   ]
+  tick
 end
 @#$#@#$#@
 GRAPHICS-WINDOW
@@ -244,8 +247,8 @@ GRAPHICS-WINDOW
 30
 -30
 30
-1
-1
+0
+0
 1
 ticks
 30.0
