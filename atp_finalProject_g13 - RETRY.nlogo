@@ -34,14 +34,16 @@ cars-own [
   ; boolean showing if the car is waiting at the intersection or not
   at-junction?
 
+  ; boolean showing if the car is currently crossing the intersection
   is-crossing?
 
+  ; by what intersection is the car observed
   observed?
 
-  step-turn
-
+  ; indicates the next turn (right, left, straight)
   next-turn
 
+  ; shows if the car has completed the turn in the intersection
   has-turned?
 ]
 
@@ -55,7 +57,7 @@ globals [
   ; acceleration of cars
   acceleration
 
-  ;
+  ; deceleration of cars
   slowdown-overshoot
 ]
 
@@ -69,8 +71,8 @@ patches-own [
 
 ; =========================
 ; SETUP
-; =========================
 
+; draws the ROADS and JUNCTIONS
 to draw-map
   ask patches [
     set pcolor black
@@ -104,6 +106,7 @@ to draw-map
   ]
 end
 
+; creates the ROADS and JUNCTIONS
 to create-roads-junctions
   ;;; define ROADS
   set roads patches with [pcolor = white]
@@ -124,7 +127,7 @@ to create-roads-junctions
       setxy (pxcor + 0.5) (pycor - 0.5) ; in order to center the JUNCTION agent
       set label who
       set label-color black
-      set crossing-now (list)
+      set crossing-now no-turtles
       set car-N nobody
       set car-E nobody
       set car-S nobody
@@ -140,6 +143,7 @@ to create-roads-junctions
   ]
 end
 
+; creates the CAR objects and places them on the ROADS
 to place-cars
 
   set-default-shape cars "car top"
@@ -149,11 +153,11 @@ to place-cars
     set size 0.75
     set arrival-time -1
 
-    ;;; SPEED
-    set goal-speed 0.7
-    set speed 0.7
+    ; SPEED
+    set goal-speed 0.4
+    set speed 0.4
 
-    ;;; place cars on road, but not on the intersections
+    ; place cars on road, but not on the intersections
     let road-location one-of roads with [
       not any? cars-on self and
       pcolor != yellow and
@@ -161,7 +165,7 @@ to place-cars
     ]
     setxy ([ pxcor ] of road-location) ([ pycor ] of road-location)
 
-    ;;; adjust their direction
+    ; adjust their direction
     set current-direction [direction] of road-location
     if current-direction = "north" [ set heading 0   ]
     if current-direction = "east"  [ set heading 90  ]
@@ -172,7 +176,6 @@ to place-cars
     set has-turned? false
     set is-crossing? false
     set observed? false
-    set step-turn -1
 
     let possible-directions (remove opposite-direction current-direction clockwise)
     set next-direction one-of possible-directions
@@ -181,11 +184,11 @@ to place-cars
   ]
 end
 
+; main SETUP function
 to setup
   clear-all
   set clockwise ["north" "east" "south" "west"]
 
-  ;;; these functions are up here ^
   draw-map
   create-roads-junctions
   place-cars
@@ -197,25 +200,88 @@ to setup
 end
 
 ; =========================
-; GO + MOVEMENT
+
 ; =========================
+; RUN + MOVEMENT ON ROADS
 
+; RUN
+to go
+  ask cars [
+    adjust-speed
+
+    ; get the next intersection/JUNCTION
+    if next-intersection = nobody [
+      let j next-junction-from patch-here current-direction
+      if  j != nobody           [ set next-intersection j ]
+      if  debug? and j = nobody [ db-car self "NO next-intersection found" ]
+    ]
+
+    let ahead1  patch-ahead 1
+    let on-road [pcolor = white]  of patch-here
+    let at-junc [pcolor = orange] of ahead1
+
+    ;; STOP at JUNCTION
+    if on-road and at-junc [
+      set speed 0
+      snap-center
+
+      if not at-junction? [
+        set at-junction? true
+      ]
+      set arrival-time ticks
+
+      ;; capture the car & its direction BEFORE changing context
+      let dir current-direction
+      let me  self
+
+      ;; only if next-intersection is a real junction agent
+      if is-turtle? next-intersection and [breed] of next-intersection = junctions [
+        ask next-intersection [
+          if dir = "north" [ set car-S me ]
+          if dir = "south" [ set car-N me ]
+          if dir = "east"  [ set car-W me ]
+          if dir = "west"  [ set car-E me ]
+        ]
+      ]
+    ]
+
+    ;;; GUARD: only move if next patch is a ROAD
+    ifelse ahead1 != nobody and [pcolor] of ahead1 = white [
+      fd speed
+    ] [
+      set speed 0
+      snap-center
+    ]
+  ]
+
+  ask junctions [
+    handle-junctions-new
+  ]
+  tick
+end
+
+; handling the SPEED of the CAR while on ROAD
 to adjust-speed
-  let cars-ahead other cars in-cone 1.6 70
+  ; 1.6 patches forward from the turtle’s position,
+  ; 30° wide (centered on its current heading)
+  let cars-ahead other cars in-cone 1.6 30
 
-  ; IF other cars in front of me are orthogonally placed in front of me, reduce speed
+  ; IF other cars are orthogonally placed in front of me, reduce speed
   ifelse any? cars-ahead with [ (heading + [heading] of myself) mod 180 = 90 ] [
-    set speed 0
+    ifelse speed <= slowdown-overshoot [
+      set speed 0
+    ] [
+      set speed speed - slowdown-overshoot
+    ]
+
   ] [
+    ; set the speed to match the one of the slowest car in front
     set cars-ahead cars-ahead with [ heading = [heading] of myself ]
     ifelse any? cars-ahead [
       set speed min list speed ([speed] of one-of cars-ahead)
-      ifelse speed <= slowdown-overshoot [
-        set speed 0
-      ] [
-        set speed speed - slowdown-overshoot
-      ]
     ] [
+
+      ; if there are no cars ahead, accelerate
       if speed < goal-speed [
         set speed min list (speed + acceleration) goal-speed
       ]
@@ -223,57 +289,102 @@ to adjust-speed
   ]
 end
 
-to go
-  ask cars [
-    adjust-speed
+; =========================
 
-    if next-intersection = nobody [
-      let j next-junction-from patch-here current-direction
-      if j != nobody [ set next-intersection j ]
-      if debug? and j = nobody [ db-car self "NO next-intersection found" ]
-    ]
+; =========================
+; MOVEMENT IN JUNCTIONS
 
-    let ahead1 patch-ahead 1
-
-    ;; STOP at JUNCTION
-    if ahead1 != nobody and [pcolor = orange] of ahead1 [
-      set speed 0
-      if not at-junction? [
-        set at-junction? true
-        set arrival-time ticks
-
-        ;; capture the car & its direction BEFORE changing context
-        let dir current-direction
-        let me  self
-
-        ;; only if next-intersection is a real junction agent
-        if is-turtle? next-intersection and [breed] of next-intersection = junctions [
-          ask next-intersection [
-            if dir = "north" [ set car-S me ]
-            if dir = "south" [ set car-N me ]
-            if dir = "east"  [ set car-W me ]
-            if dir = "west"  [ set car-E me ]
-          ]
-        ]
-      ]
-    ]
-
-    ;;; GUARD: only move if next patch is ROAD/JUNCTION
-    ifelse ahead1 != nobody and ([pcolor] of ahead1 = white or [pcolor] of ahead1 = yellow) [
-      fd speed
-    ] [
-      set speed 0
-    ]
+to turn-new
+  if next-turn = "left" [
+    fd-centered 1
+    set heading heading - 45
+    set heading heading - 45
+    fd-centered 3
   ]
 
-  ask junctions [
-    handle-intersection
+  if next-turn = "right" [
+    set heading heading + 45
+    set heading heading + 45
+    fd-centered 2
   ]
-  tick
+
+  if next-turn = "straight" [
+    fd-centered 3
+  ]
+
+  set has-turned? true
 end
 
-to handle-intersection
-  let cars-waiting (turtle-set)
+to continue-turn-new [j c]
+  ask c [
+    turn-new
+
+    if has-turned? [
+      set current-direction next-direction
+      set next-direction    one-of remove opposite-direction (current-direction) clockwise
+      set next-turn         get-next-turn current-direction next-direction
+      set arrival-time      -1
+      set next-intersection next-junction-from patch-here current-direction
+      set speed             goal-speed
+      set observed?         false
+      set is-crossing?      false
+      set has-turned?       false
+    ]
+  ]
+
+  ask j [
+    ; keep only cars still crossing (those with is-crossing? = true)
+    set crossing-now crossing-now with [is-crossing?]
+  ]
+end
+
+to start-turn-new [j c]
+  ask j [
+    if car-N = c [ set car-N nobody ]
+    if car-S = c [ set car-S nobody ]
+    if car-E = c [ set car-E nobody ]
+    if car-W = c [ set car-W nobody ]
+  ]
+
+  ask c [
+    fd-centered 2
+  ]
+end
+
+to first-cross-new [c-w c-n]
+  ; get the CARS that arrived EARLIEST at the JUNCTION
+  let earliest-arrival min [arrival-time] of c-w
+  let earliest-cars    c-w with [ arrival-time = earliest-arrival ]
+
+  ; see which one should have priority, if 2 or more CARS arrived at the SAME TIME
+  let filtered-by-left-turn  earliest-cars          with [ not yields-by-left-turn? self earliest-cars ]
+  let filtered-by-right-rule filtered-by-left-turn  with [ not loses-right-rule?    self earliest-cars ]
+
+  ; START TURNING, while checking for each set if it is or not empty
+  let pick1 one-of filtered-by-right-rule
+  ifelse pick1 != nobody [
+    set crossing-now (turtle-set c-n pick1)
+    start-turn-new self pick1
+  ] [
+    let pick2 one-of filtered-by-left-turn
+    ifelse pick2 != nobody [
+      set crossing-now (turtle-set c-n pick2)
+      start-turn-new self pick2
+    ] [
+      let pick3 one-of earliest-cars
+      if pick3 != nobody [
+        set crossing-now (turtle-set c-n pick3)
+        start-turn-new self pick3
+      ]
+    ]
+  ]
+end
+
+to handle-junctions-new
+  ; create a list of the cars waiting for their turn in the junction
+  let cars-waiting no-turtles
+
+  ; put the first cars waiting at the intersection to
   foreach (list car-N car-E car-S car-W) [ c ->
     if c != nobody [
       set cars-waiting (turtle-set cars-waiting c)
@@ -283,171 +394,259 @@ to handle-intersection
     ]
   ]
 
+  ; if there are no cars waiting to enter the intersection, stop
   if not any? cars-waiting [ stop ]
 
-  ifelse length crossing-now = 0 [
-
-    ; precedence, earliest arrival
-    let earliest min [arrival-time] of cars-waiting
-
-    let earliest-cars cars-waiting with [ arrival-time = earliest ]
-
-    ;; left-turn yields to oncoming straight/right + right-hand tie-break
-    let filtered  earliest-cars with [ not yields-by-left-turn? self earliest-cars ]
-    let filtered2 filtered       with [ not loses-right-rule?    self earliest-cars ]
-
-    let pick one-of filtered2
-
-    if pick != nobody [
-      start-turn self pick
+  ifelse count crossing-now = 0 [
+    ; if no cars are crossing now, get the first car and start the crossing process
+    first-cross-new cars-waiting crossing-now
+  ] [
+    ; if there are CARS crossing now, CONTINUE TURN
+    ask crossing-now [
+      continue-turn-new myself self
     ]
-  ][
-    ask (turtle-set crossing-now) [
-      continue-turn self
-    ]
-
-    if length crossing-now = 1 [
-      let pick crossing-now
-      let compat cars-waiting with [
-        not paths-conflict? approach-of pick [next-turn] of pick approach-of self [next-turn] of self
-        and not yields-by-left-turn? self (turtle-set pick)
-        and not loses-right-rule?    self (turtle-set pick)
-      ]
-      if any? compat [
-        let earliest-compat min-one-of compat [arrival-time]
-
-        ;; now you can, e.g., start this car as well:
-        ;; (call your start-crossing/start-turn logic)
-        start-turn self earliest-compat
-      ]
-    ]
-
-  ]
-end
-
-to start-turn [j c]
-  ask j [
-    if car-N = c [ set car-N nobody ]
-    if car-S = c [ set car-S nobody ]
-    if car-E = c [ set car-E nobody ]
-    if car-W = c [ set car-W nobody ]
-    set crossing-now lput c crossing-now
-
-  ]
-  ask c [
-    fd-centered 1 speed
-    if next-turn = "left" [set step-turn 6]
-    if next-turn = "right" [ set step-turn 4]
-    if next-turn = "straight" [set step-turn 5]
-    set step-turn step-turn - 1
-  ]
-end
-
-to continue-turn [j c]
-  ask c [
-    if [pcolor] of patch-ahead 1 = orange [
-      ifelse has-turned? or next-turn = "straight" [
-        set current-direction next-direction
-        set next-direction one-of remove opposite-direction (current-direction) clockwise
-        set next-turn get-next-turn current-direction next-direction
-        set arrival-time -1
-        set next-intersection next-junction-from patch-here current-direction
-        set speed goal-speed
-        set observed? false
-        set is-crossing? false
-        set has-turned? false
-      ] [
-        ifelse next-turn = "right" [
-          rt 90
-        ][
-          lt 90
-        ]
-        set has-turned? false
-      ]
-    ]
-    fd-centered 1 speed
-  ]
-  ask j [
-    ;; keep only cars still crossing (those with is-crossing? = true)
-    set crossing-now filter [car-cross -> [is-crossing?] of car-cross] crossing-now
   ]
 
 end
 
+;; WHOLE PART COMMENTED OUT
+;; =========================
 
-to turn [j c]
-  ask j [
-    if car-N = c [ set car-N nobody ]
-    if car-S = c [ set car-S nobody ]
-    if car-E = c [ set car-E nobody ]
-    if car-W = c [ set car-W nobody ]
+;; =========================
+;; (WRONG) MOVEMENT IN JUNCTIONS
+;
+;to handle-junctions
+;  let cars-waiting no-turtles
+;
+;  foreach (list car-N car-E car-S car-W) [ c ->
+;    if c != nobody [
+;      set cars-waiting (turtle-set cars-waiting c)
+;      if not [observed?] of c [
+;        ask c [ set observed? true ]
+;      ]
+;    ]
+;  ]
+;
+;  if not any? cars-waiting [ stop ]
+;
+;  ; IF no CARS are crossing now:
+;  ifelse count crossing-now = 0 [
+;    ; get the CARS that arrived EARLIEST at the JUNCTION
+;    let earliest min [arrival-time] of cars-waiting
+;    let earliest-cars cars-waiting with [ arrival-time = earliest ]
+;
+;    ; see which one should have priority, if 2 or more CARS arrived at the SAME TIME
+;    let filtered  earliest-cars with [ not yields-by-left-turn? self earliest-cars ]
+;    let filtered2 filtered      with [ not loses-right-rule?    self earliest-cars ]
+;
+;    ; START TURNING
+;    let pick one-of filtered2
+;    if pick != nobody [
+;      set crossing-now (turtle-set crossing-now pick)
+;      start-turn self pick
+;    ]
+;
+;  ][
+;    ; if there are CARS crossing-now:
+;    ; CONTINUE TURN
+;    ask crossing-now [
+;      continue-turn myself self
+;    ]
+;
+;
+;    if count crossing-now = 1 [
+;      let pick one-of crossing-now
+;
+;      let compat cars-waiting with [
+;                 not paths-conflict?          approach-of pick [next-turn] of pick approach-of self [next-turn] of self
+;                 and not yields-by-left-turn? self crossing-now
+;                 and not loses-right-rule?    self crossing-now
+;      ]
+;
+;      if any? compat [
+;        let earliest-compat min-one-of compat [arrival-time]
+;
+;        ; now you can start this car as well:
+;        start-turn self earliest-compat
+;      ]
+;    ]
+;
+;  ]
+;end
+;
+;to start-turn [j c]
+;  ask j [
+;    if car-N = c [ set car-N nobody ]
+;    if car-S = c [ set car-S nobody ]
+;    if car-E = c [ set car-E nobody ]
+;    if car-W = c [ set car-W nobody ]
+;  ]
+;
+;  ask c [
+;    if next-turn = "left" [set step-turn 5]
+;    if next-turn = "right" [ set step-turn 3]
+;    if next-turn = "straight" [set step-turn 4]
+;  ]
+;end
+;
+;to continue-turn [j c]
+;  ask c [
+;    if [pcolor] of patch-ahead 1 = orange [
+;      if has-turned? or next-turn = "straight" [
+;        set current-direction next-direction
+;        set next-direction one-of remove opposite-direction (current-direction) clockwise
+;        set next-turn get-next-turn current-direction next-direction
+;        set arrival-time -1
+;        set next-intersection next-junction-from patch-here current-direction
+;        set speed goal-speed
+;        set observed? false
+;        set is-crossing? false
+;        set has-turned? false
+;      ]
+;    ]
+;  ]
+;
+;end
+;
+;to turn [j c]
+;
+;  ask j [
+;    if car-N = c [ set car-N nobody ]
+;    if car-S = c [ set car-S nobody ]
+;    if car-E = c [ set car-E nobody ]
+;    if car-W = c [ set car-W nobody ]
+;  ]
+;  ask c [
+;    set at-junction? false
+;    fd-centered 2
+;
+;    if next-direction = "north" [
+;      if current-direction = "east" [fd-centered 1]
+;      set heading 0
+;      if current-direction = "north" [fd-centered 3]
+;      if current-direction = "east" [fd-centered 3]
+;      if current-direction = "west" [fd-centered 2]
+;    ]
+;
+;    if next-direction = "east"  [
+;      if current-direction = "south" [fd-centered 1]
+;      set heading 90
+;      if current-direction = "east" [fd-centered 3]
+;      if current-direction = "south" [fd-centered 3]
+;      if current-direction = "north" [fd-centered 2]
+;    ]
+;
+;    if next-direction = "south" [
+;      if current-direction = "west" [fd-centered 1]
+;      set heading 180
+;      if current-direction = "south" [fd-centered 3]
+;      if current-direction = "west" [fd-centered 3]
+;      if current-direction = "east" [fd-centered 2]
+;    ]
+;
+;    if next-direction = "west"  [
+;      if current-direction = "north" [fd-centered 1]
+;      set heading 270
+;      if current-direction = "north" [fd-centered 3]
+;      if current-direction = "west" [fd-centered 3]
+;      if current-direction = "south" [fd-centered 2]
+;    ]
+;
+;    snap-center
+;    set current-direction next-direction
+;    set next-direction one-of remove opposite-direction (current-direction) clockwise
+;    set next-turn get-next-turn current-direction next-direction
+;    set arrival-time -1
+;    set next-intersection next-junction-from patch-here current-direction
+;    set speed goal-speed
+;    db-car self "END CROSS"
+;  ]
+;end
+;
+;; geometric CONFLICT approximation for a 4-way single lane JUNCTION
+;to-report paths-conflict? [a-approach a-turn b-approach b-turn]
+;
+;  if a-approach = b-approach [ report true ]
+;
+;  let opp? (b-approach = opposite a-approach)
+;  let adj-right? (b-approach = right-of a-approach)
+;  let adj-left?  (a-approach = right-of b-approach)
+;
+;  if opp? [
+;    if (a-turn = "straight" and b-turn = "straight") [ report true ]
+;    if (a-turn = "left" and (b-turn = "straight" or b-turn = "right")) [ report true ]
+;    if (b-turn = "left" and (a-turn = "straight" or a-turn = "right")) [ report true ]
+;
+;    report false
+;  ]
+;
+;  if adj-right? or adj-left? [
+;    if (a-turn = "straight" and b-turn = "straight") [ report true ]
+;    if (a-turn = "right" and b-turn = "straight" and b-approach = right-of a-approach) [ report true ]
+;    if (b-turn = "right" and a-turn = "straight" and a-approach = right-of b-approach) [ report true ]
+;    if (a-turn = "left" and not (b-turn = "right" and b-approach = right-of a-approach)) [ report true ]
+;    if (b-turn = "left" and not (a-turn = "right" and a-approach = right-of b-approach)) [ report true ]
+;  ]
+;
+;  report false
+;end
+;
+;; =========================
+; AUXILIARY FUNCTIONS
+
+to-report paths-conflict? [a-approach a-turn b-approach b-turn]
+
+  ; in case the cars are comming from the same direction
+  if a-approach = b-approach [ report true ]
+
+  ; separate the rest of the cases
+  let opp?       (b-approach = opposite a-approach)
+  let app-right? (b-approach = right-of a-approach)
+  let app-left?  (a-approach = right-of b-approach)
+
+  ; handle all the cases where the paths intersect
+  if opp? [
+    if (a-turn = "straight" or a-turn = "right") and b-turn = "left"                             [ report true ]
+    if  a-turn = "left"                          and (b-turn = "straight" or b-turn = "right") [ report true ]
+
+    report false
   ]
-  ask c [
-    set color green
-    set at-junction? false
-    fd-centered 2 speed
 
-    if next-direction = "north" [
-      if current-direction = "east" [fd-centered 1 speed]
-      set heading 0
-      if current-direction = "north" [fd-centered 3 speed]
-      if current-direction = "east" [fd-centered 3 speed]
-      if current-direction = "west" [fd-centered 2 speed]
-    ]
-    if next-direction = "east"  [
-      if current-direction = "south" [fd-centered 1 speed]
-      set heading 90
-      if current-direction = "east" [fd-centered 3 speed]
-      if current-direction = "south" [fd-centered 3 speed]
-      if current-direction = "north" [fd-centered 2 speed]
-    ]
-    if next-direction = "south" [
-      if current-direction = "west" [fd-centered 1 speed]
-      set heading 180
-      if current-direction = "south" [fd-centered 3 speed]
-      if current-direction = "west" [fd-centered 3 speed]
-      if current-direction = "east" [fd-centered 2 speed]
-    ]
-    if next-direction = "west"  [
-      if current-direction = "north" [fd-centered 1 speed]
-      set heading 270
-      if current-direction = "north" [fd-centered 3 speed]
-      if current-direction = "west" [fd-centered 3 speed]
-      if current-direction = "south" [fd-centered 2 speed]
-    ]
-    snap-center
-    set current-direction next-direction
-    set next-direction one-of remove opposite-direction (current-direction) clockwise
-    set next-turn get-next-turn current-direction next-direction
-    set arrival-time -1
-    set next-intersection next-junction-from patch-here current-direction
-    set speed goal-speed
-    db-car self "END CROSS"
+  if app-left? [
+    if (a-turn = "straight" or a-turn = "left") and (b-turn = "straight" or b-turn = "left") [ report true ]
+    if  a-turn = "right"                        and  b-turn = "straight"                [ report true ]
   ]
+
+  if app-right? [
+    if (b-turn = "straight" or b-turn = "left") and (a-turn = "straight" or a-turn = "left") [ report true ]
+    if  b-turn = "right"                         and  a-turn = "straight"               [ report true ]
+  ]
+
+  report false
 end
 
-;; Step exactly one patch and snap to its center
-to fd1-centered [len]
-  fd len
-  move-to patch-here
+; Step exactly one patch and snap to its center
+to fd1-centered
+  snap-center
+  fd 1
+  snap-center
 end
 
-;; Step N patches, snapping at each patch
-to fd-centered [n len]
-  repeat n [ fd1-centered len]
+; Step N patches, snapping at each patch
+to fd-centered [n]
+  repeat n [fd1-centered]
 end
 
-;; Hard snap the current turtle to the exact center of its current patch
+; Hard snap the current turtle to the exact center of its current patch
 to snap-center
   move-to patch-here
 end
 
-
-
+; indicates the type of TURN, based on CURRENT DIRECTION and NEXT DIRECTION
 to-report get-next-turn [curr-dir next-dir]
   let i1 position curr-dir clockwise
   let i2 position next-dir clockwise
-  let diff (i1 - i2) mod 4
+  let diff (abs (i1 - i2))
 
   if diff = 0 [ report "straight" ]
   if diff = 1 [ report "right" ]
@@ -493,8 +692,8 @@ to-report next-junction-from [p dir]
   report nobody
 end
 
-; Approach is the side the car is COMING FROM relative to the junction
-; (opposite of the car's movement direction)
+; Indicates the SIDE where the CAR stopped, relative to the JUNCTION
+; (gives the opposite of the car's movement direction)
 to-report approach-of [c]
   ;; 1) preferred: use the car's current-direction if valid
   let d [current-direction] of c
@@ -506,30 +705,39 @@ to-report approach-of [c]
   ]
 end
 
-to-report opposite-direction [a]
-  if a = "north" [report "south"]
-  if a = "south" [report "north"]
-  if a = "east" [report "west"]
-  if a = "west" [report "east"]
+; opposite DIRECTION
+; (same as the function above,
+; but it works only with north, south, east, west)
+to-report opposite-direction [d]
+  if d = "north" [report "south"]
+  if d = "south" [report "north"]
+  if d = "east" [report "west"]
+  if d = "west" [report "east"]
 end
 
-to-report opposite [a]
-  if a = "N" [ report "S" ]
-  if a = "E" [ report "W" ]
-  if a = "S" [ report "N" ]
-  if a = "W" [ report "E" ]
+; opposite DIRECTION
+; (same as the function above,
+; but it works only with N, S, E, W)
+to-report opposite [d]
+  if d = "N" [ report "S" ]
+  if d = "E" [ report "W" ]
+  if d = "S" [ report "N" ]
+  if d = "W" [ report "E" ]
 end
 
-to-report right-of [a]
-  if a = "N" [ report "E" ]
-  if a = "E" [ report "S" ]
-  if a = "S" [ report "W" ]
-  if a = "W" [ report "N" ]
+; direction of OTHER CAR coming from the RIGHT
+to-report right-of [d]
+  if d = "N" [ report "W" ]
+  if d = "E" [ report "N" ]
+  if d = "S" [ report "E" ]
+  if d = "W" [ report "S" ]
 end
 
-; left-turn yields to oncoming straight/right
+; left-turn → YIELDS to the car coming from straight ahead/right
 to-report yields-by-left-turn? [c candidates]
   let my-app approach-of c
+
+  ;ISN'Y THIS JUST NEXT-TURN?
   let my-turn get-next-turn ([current-direction] of c) ([next-direction] of c)
   if my-turn != "left" [ report false ]
   report any? candidates with [
@@ -538,7 +746,7 @@ to-report yields-by-left-turn? [c candidates]
   ]
 end
 
-; same-arrival tie → yield to the right
+; same-arrival tie → yield to the CAR approaching from the RIGHT
 to-report loses-right-rule? [c candidates]
   let my-app approach-of c
   let my-arr [arrival-time] of c
@@ -547,30 +755,10 @@ to-report loses-right-rule? [c candidates]
   ]
 end
 
-; geometric conflict approximation for a 4-way single lane
-to-report paths-conflict? [a-approach a-turn b-approach b-turn]
-  if a-approach = b-approach [ report true ]
-  let opp? (b-approach = opposite a-approach)
-  let adj-right? (b-approach = right-of a-approach)
-  let adj-left?  (a-approach = right-of b-approach)
+; =========================
 
-  if opp? [
-    if (a-turn = "straight" and b-turn = "straight") [ report true ]
-    if (a-turn = "left" and (b-turn = "straight" or b-turn = "right")) [ report true ]
-    if (b-turn = "left" and (a-turn = "straight" or a-turn = "right")) [ report true ]
-    report false
-  ]
-
-  if adj-right? or adj-left? [
-    if (a-turn = "straight" and b-turn = "straight") [ report true ]
-    if (a-turn = "right" and b-turn = "straight" and b-approach = right-of a-approach) [ report true ]
-    if (b-turn = "right" and a-turn = "straight" and a-approach = right-of b-approach) [ report true ]
-    if (a-turn = "left" and not (b-turn = "right" and b-approach = right-of a-approach)) [ report true ]
-    if (b-turn = "left" and not (a-turn = "right" and a-approach = right-of b-approach)) [ report true ]
-  ]
-
-  report false
-end
+; =========================
+; DEBUGGING
 
 to db [msg]
   if debug? [ show (word "[" ticks "] " msg) ]
@@ -599,6 +787,8 @@ to db-j [j msg]
                ") " msg)
   ]
 end
+
+; =========================
 @#$#@#$#@
 GRAPHICS-WINDOW
 210
@@ -621,8 +811,8 @@ GRAPHICS-WINDOW
 30
 -30
 30
-1
-1
+0
+0
 1
 ticks
 30.0
@@ -701,7 +891,7 @@ SWITCH
 343
 debug?
 debug?
-0
+1
 1
 -1000
 
