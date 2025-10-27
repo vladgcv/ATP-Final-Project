@@ -45,6 +45,9 @@ cars-own [
 
   ; shows if the car has completed the turn in the intersection
   has-turned?
+
+  ; brand of the car for the "brand" intercommunication setting
+  brand
 ]
 
 globals [
@@ -59,6 +62,12 @@ globals [
 
   ; deceleration of cars
   slowdown-overshoot
+
+  ; to store each brand
+  brands
+
+  ; to measure the average speed
+  avg-speed
 ]
 
 patches-own [
@@ -147,6 +156,9 @@ end
 to place-cars
 
   set-default-shape cars "car top"
+  let k number-of-brands
+  let car-palette [red green blue pink lime ]
+
 
   create-cars number-of-cars [
     set color blue
@@ -154,8 +166,8 @@ to place-cars
     set arrival-time -1
 
     ; SPEED
-    set goal-speed 0.4
-    set speed 0.4
+    set goal-speed 0.8
+    set speed 0.8
 
     ; place cars on road, but not on the intersections
     let road-location one-of roads with [
@@ -177,11 +189,29 @@ to place-cars
     set is-crossing? false
     set observed? false
 
+
     let possible-directions (remove opposite-direction current-direction clockwise)
     set next-direction       one-of possible-directions
     set next-junction        next-junction-from road-location current-direction
     set next-turn            get-next-turn current-direction next-direction
+    if intercommunication = "BRAND" [
+      let my-index count cars with [ who < [who] of myself ]
+      set brand ((my-index mod k) + 1)
+      set color scale-color red brand 1 k
+      set color item ((brand - 1) mod length car-palette) car-palette
+    ]
+    if intercommunication = "ALL" [
+      set brand 1
+    ]
   ]
+end
+
+; setup the brands
+to set-brands
+  if intercommunication = "ALL" [
+    set number-of-brands 1
+  ]
+  set brands n-values number-of-brands [ i -> i + 1 ]
 end
 
 ; main SETUP function
@@ -189,6 +219,7 @@ to setup
   clear-all
   set clockwise ["north" "east" "south" "west"]
 
+  set-brands
   draw-map
   create-roads-junctions
   place-cars
@@ -210,14 +241,17 @@ to go
 
     ; get the next intersection/JUNCTION
     if next-junction = nobody [
+      ;; inside ask cars [...] each tick, before using next-junction:
+      set current-direction dir-from-heading heading
       let j next-junction-from patch-here current-direction
       if  j != nobody           [ set next-junction j ]
       if  debug? and j = nobody [ db-car self "NO next-intersection found" ]
     ]
 
-    let ahead1  patch-ahead 0.5
+    let ahead1  patch-ahead 0.9
     let on-road [pcolor = white]  of patch-here
     let at-junc [pcolor = orange] of ahead1
+    let road-forward [pcolor = white] of ahead1
 
     ; STOP at JUNCTION
     if on-road and at-junc [
@@ -226,8 +260,8 @@ to go
 
       if not at-junction? [
         set at-junction? true
+        set arrival-time ticks
       ]
-      set arrival-time ticks
 
       ; capture the car & its direction BEFORE changing context
       let dir current-direction
@@ -246,12 +280,13 @@ to go
     ]
 
     adjust-speed
+    db-color self
 
     ;;; GUARD ;;;
-    let road-forward [pcolor = white] of ahead1
     ifelse road-forward [
       fd speed
     ] [
+      db-color self
       set speed 0
       snap-center
     ]
@@ -259,6 +294,12 @@ to go
 
   ask junctions [
     handle-junctions-new
+  ]
+
+  ifelse any? cars [
+    set avg-speed mean [speed] of cars
+  ] [
+    set avg-speed 0
   ]
 
   tick
@@ -274,8 +315,10 @@ to adjust-speed
   ifelse any? other cars-ahead with [ (heading + [heading] of myself) mod 180 = 90 ] [
     ifelse speed <= slowdown-overshoot [
       set speed 0
+      if debug? [ db "speed set to 0 in adjust-speed" ]
     ] [
       set speed speed - slowdown-overshoot
+      if debug? [ db "speed updated in adjust-speed" ]
     ]
 
   ] [
@@ -348,9 +391,11 @@ to continue-turn-new [j c]
 
     if has-turned? [
       set current-direction next-direction
+      set current-direction dir-from-heading heading
       set next-direction    one-of remove opposite-direction (current-direction) clockwise
       set next-turn         get-next-turn current-direction next-direction
       set arrival-time      -1
+
       set next-junction     next-junction-from patch-here current-direction
       set speed             goal-speed
       set at-junction?      false
@@ -375,12 +420,39 @@ to start-turn-new [j c]
   ]
 
   ask c [
+    set is-crossing? true
     fd 1
     display
     fd 1
     display
   ]
 end
+
+;; Try to add one same-brand follower that doesn't conflict with leader.
+;; j = junction (self in junction context), c-w = cars-waiting
+to maybe-add-brand-buddy [j c-w leader]
+  if intercommunication != "BRAND" or intercommunication != "ALL" [ stop ]
+
+  let same-brand-waiters c-w with [
+    who != [who] of leader and
+    brand = [brand] of leader and
+    arrival-time >= [arrival-time] of leader and
+    not paths-conflict?
+      (approach-from-direction current-direction) next-turn
+      (approach-from-direction [current-direction] of leader) ([next-turn] of leader)
+  ]
+
+  if any? same-brand-waiters [
+    let next-arrival min [arrival-time] of same-brand-waiters
+    let consecutive one-of same-brand-waiters with [arrival-time = next-arrival]
+    if consecutive != nobody [
+      ;; extend crossing-now and start the follower
+      ask j [ set crossing-now (turtle-set crossing-now consecutive) ]
+      start-turn-new j consecutive
+    ]
+  ]
+end
+
 
 to first-cross-new [c-w c-n]
   ; get the CARS that arrived EARLIEST at the JUNCTION
@@ -396,16 +468,19 @@ to first-cross-new [c-w c-n]
   ifelse pick1 != nobody [
     set crossing-now (turtle-set c-n pick1)
     start-turn-new self pick1
+    maybe-add-brand-buddy self c-w pick1
   ] [
     let pick2 one-of filtered-by-left-turn
     ifelse pick2 != nobody [
       set crossing-now (turtle-set c-n pick2)
       start-turn-new self pick2
+      maybe-add-brand-buddy self c-w pick2
     ] [
       let pick3 one-of earliest-cars
       if pick3 != nobody [
         set crossing-now (turtle-set c-n pick3)
         start-turn-new self pick3
+        maybe-add-brand-buddy self c-w pick3
       ]
     ]
   ]
@@ -416,11 +491,13 @@ to handle-junctions-new
   let cars-waiting no-turtles
 
   ; put the first cars waiting at the intersection to
+  ;; put the first cars waiting at the intersection
   foreach (list car-N car-E car-S car-W) [ c ->
-    if c != nobody [
-      set cars-waiting (turtle-set cars-waiting c)
-      if not [observed?] of c [
-        ask c [ set observed? true ]
+    if is-turtle? c [
+      ifelse eligible-to-queue? c [
+        set cars-waiting (turtle-set cars-waiting c)
+      ] [
+        ask c [ set observed? true ]  ;; becomes eligible next tick
       ]
     ]
   ]
@@ -432,44 +509,73 @@ to handle-junctions-new
     ; if no cars are crossing now, get the first car and start the crossing process
     first-cross-new cars-waiting crossing-now
   ] [
-    ; if there are CARS crossing now, CONTINUE TURN
+    ;; there are cars crossing; keep them going
     ask crossing-now [
-      continue-turn-new myself self
+      continue-turn-new myself self   ;; (junction, car)
+    ]
+
+    ;; if exactly one car is crossing, we may allow a non-conflicting companion
+    if count crossing-now = 1 [
+      let x one-of crossing-now  ;; the single car already crossing
+
+      ;; choose a waiting car whose path does NOT conflict with x
+      let w one-of cars-waiting with [
+        not paths-conflict? current-direction next-turn
+                            [current-direction] of x [next-turn] of x
+      ]
+
+      if w != nobody [
+        ;; start the additional compatible car
+        start-turn-new w self  ;; (car, junction)
+      ]
     ]
   ]
 
 end
 
-to-report paths-conflict? [a-approach a-turn b-approach b-turn]
+to-report approach-from-direction [d]
+  if d = "north" [ report "S" ]
+  if d = "east"  [ report "W" ]
+  if d = "south" [ report "N" ]
+  if d = "west"  [ report "E" ]
+end
 
-  ; in case the cars are comming from the same direction
+
+to-report paths-conflict? [a-approach a-turn b-approach b-turn]
+  ;; Accept either approach letters (N/E/S/W) or road directions (north/…)
+  if member? a-approach ["north" "east" "south" "west"] [
+    set a-approach approach-from-direction a-approach
+  ]
+  if member? b-approach ["north" "east" "south" "west"] [
+    set b-approach approach-from-direction b-approach
+  ]
+
+  ;; in case the cars are coming from the same approach
   if a-approach = b-approach [ report true ]
 
-  ; separate the rest of the cases
   let opp?       (b-approach = opposite a-approach)
   let app-right? (b-approach = right-of a-approach)
   let app-left?  (a-approach = right-of b-approach)
 
-  ; handle all the cases where the paths intersect
   if opp? [
-    if (a-turn = "straight" or a-turn = "right") and b-turn = "left"                             [ report true ]
-    if  a-turn = "left"                          and (b-turn = "straight" or b-turn = "right") [ report true ]
-
+    if (a-turn = "straight" or a-turn = "right") and b-turn = "left" [ report true ]
+    if  a-turn = "left" and (b-turn = "straight" or b-turn = "right") [ report true ]
     report false
   ]
 
   if app-left? [
     if (a-turn = "straight" or a-turn = "left") and (b-turn = "straight" or b-turn = "left") [ report true ]
-    if  a-turn = "right"                        and  b-turn = "straight"                [ report true ]
+    if  a-turn = "right" and b-turn = "straight" [ report true ]
   ]
 
   if app-right? [
     if (b-turn = "straight" or b-turn = "left") and (a-turn = "straight" or a-turn = "left") [ report true ]
-    if  b-turn = "right"                         and  a-turn = "straight"               [ report true ]
+    if  b-turn = "right" and a-turn = "straight" [ report true ]
   ]
 
   report false
 end
+
 
 ; Step N patches, snapping at each patch
 to fd-centered [n]
@@ -532,6 +638,18 @@ to-report next-junction-from [p dir]
   report nobody
 end
 
+;; helper: should car c be eligible to join the waiting set?
+to-report eligible-to-queue? [c]
+  if not is-turtle? c [ report false ]
+  if intercommunication = "ALL"  [ report true ]
+  if intercommunication = "NONE" [ report [observed?] of c ]
+  ;; intercommunication = "BRAND"
+  report ([observed?] of c) or any? cars with [
+    brand = [brand] of c and observed? and who != [who] of c
+  ]
+end
+
+
 ; Indicates the SIDE where the CAR stopped, relative to the JUNCTION
 ; (gives the opposite of the car's movement direction)
 to-report approach-of [c]
@@ -567,10 +685,10 @@ end
 
 ; direction of OTHER CAR coming from the RIGHT
 to-report right-of [d]
-  if d = "N" [ report "W" ]
-  if d = "E" [ report "N" ]
-  if d = "S" [ report "E" ]
-  if d = "W" [ report "S" ]
+  if d = "N" [ report "E" ]
+  if d = "E" [ report "S" ]
+  if d = "S" [ report "W" ]
+  if d = "W" [ report "N" ]
 end
 
 ; left-turn → YIELDS to the car coming from straight ahead/right
@@ -593,6 +711,16 @@ to-report loses-right-rule? [c candidates]
   report any? candidates with [
     [arrival-time] of self = my-arr and approach-of self = right-of my-app
   ]
+end
+
+to-report dir-from-heading [h]
+  let a (h mod 360)
+  if a < 0 [ set a a + 360 ]
+  if a >= 315 or a < 45  [ report "north" ]
+  if a >= 45  and a < 135 [ report "east"  ]
+  if a >= 135 and a < 225 [ report "south" ]
+  ;; a in [225,315)
+  report "west"
 end
 
 ; =========================
@@ -627,6 +755,30 @@ to db-j [j msg]
                ") " msg)
   ]
 end
+to db-color [c]   ;; c is a car (or nobody)
+  if not debug? [ stop ]
+
+  let ahead-patch [patch-ahead 0.5] of c
+  let here-patch  [patch-here]      of c
+
+  let here-col  [pcolor] of here-patch
+  let ahead-col [pcolor] of ahead-patch
+
+  show (word "car#" [who] of c
+             " heading=" [heading] of c
+             " crossing?=" [is-crossing?] of c
+             " at-junction?=" [at-junction?] of c
+             " here=" (color-name here-col)
+             " ahead=" (color-name ahead-col))
+end
+
+to-report color-name [c]
+  if c = white  [ report "white"  ]
+  if c = yellow [ report "yellow" ]
+  if c = orange [ report "orange" ]
+  if c = black [report "black"]
+end
+
 
 ; =========================
 @#$#@#$#@
@@ -718,22 +870,58 @@ number-of-cars
 number-of-cars
 0
 300
-120.0
+160.0
 10
 1
 NIL
 HORIZONTAL
 
 SWITCH
-95
-310
-198
-343
+60
+480
+163
+513
 debug?
 debug?
 0
 1
 -1000
+
+CHOOSER
+30
+70
+182
+115
+Intercommunication
+Intercommunication
+"NONE" "BRAND" "ALL"
+2
+
+SLIDER
+20
+145
+192
+178
+number-of-brands
+number-of-brands
+2
+5
+1.0
+1
+1
+NIL
+HORIZONTAL
+
+MONITOR
+50
+280
+122
+325
+NIL
+avg-speed
+17
+1
+11
 
 @#$#@#$#@
 ## WHAT IS IT?
