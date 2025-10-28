@@ -311,6 +311,7 @@ to go
   ]
 
   tick
+
 end
 
 ; handling the SPEED of the CAR while on ROAD

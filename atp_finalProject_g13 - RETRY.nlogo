@@ -311,6 +311,7 @@ to go
   ]
 
   tick
+  if ticks >= 200 [stop]
 end
 
 ; handling the SPEED of the CAR while on ROAD
@@ -1339,10 +1340,12 @@ NetLogo 6.4.0
     <enumeratedValueSet variable="debug?">
       <value value="false"/>
     </enumeratedValueSet>
-    <steppedValueSet variable="number-of-brands" first="2" step="1" last="5"/>
+    <enumeratedValueSet variable="number-of-brands">
+      <value value="1"/>
+    </enumeratedValueSet>
     <steppedValueSet variable="number-of-cars" first="25" step="25" last="250"/>
     <enumeratedValueSet variable="Intercommunication">
-      <value value="&quot;BRAND&quot;"/>
+      <value value="&quot;ALL&quot;"/>
     </enumeratedValueSet>
   </experiment>
 </experiments>

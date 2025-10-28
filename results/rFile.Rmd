@@ -8,34 +8,630 @@ This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute
 Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
 
 ```{r}
-library(ggplot2)
 library(readr)
 library(dplyr)
+library(ggplot2)
+library(rlang)
 
 csv_path <- "table_none.csv"
 raw <- read_csv(csv_path, skip = 6, show_col_types = FALSE)
+names(raw) <- make.names(names(raw))
 
-unique_cars <- unique(raw$number.of.cars)
+# Detect the "number of cars" column automatically
+car_col <- grep("^number[._-]?of[._-]?cars$", names(raw), ignore.case = TRUE, value = TRUE)
+car_sym <- sym(car_col)
 
-for (n in unique_cars) {
-  df <- filter(raw, number_of_cars == n)
+# Summarise mean ± sd for each tick
+summary_df <- raw %>%
+  group_by(!!car_sym, ticks) %>%
+  summarise(
+    mean_speed = mean(avg.speed, na.rm = TRUE),
+    sd_speed   = sd(avg.speed,   na.rm = TRUE),
+    .groups    = "drop"
+  )
+
+# Create output folder if desired
+outdir <- "plots"
+if (!dir.exists(outdir)) dir.create(outdir)
+
+# Loop through each value of number_of_cars
+for (n in unique(summary_df[[car_col]])) {
+  df <- filter(summary_df, !!car_sym == n)
   
-  p <- ggplot(df, aes(x = ticks, y = avg.speed)) +
-    geom_line(color = "red", alpha = 0.6) +
-    geom_smooth(se = TRUE, color = "black") +
-    labs(
-      title = paste("Average Speed for", n, "Cars"),
-      x = "Time steps",
-      y = "Average speed"
-    ) +
+  p <- ggplot(df, aes(x = ticks, y = mean_speed)) +
+    geom_ribbon(aes(ymin = mean_speed - sd_speed,
+                    ymax = mean_speed + sd_speed),
+                fill = "red", alpha = 0.3) +
+    geom_line(color = "darkred", linewidth = 1) +
+    labs(title = paste("Average speed over time (", n, " cars)", sep = ""),
+         x = "Ticks", y = "Average speed") +
     theme_minimal()
   
-  print(p)  # Show in RStudio Viewer
+  # --- SAVE AS PNG ---
+  outfile <- file.path(outdir, paste0("none_avg_speed_", n, "cars.png"))
+  ggsave(outfile, plot = p, width = 7, height = 5, dpi = 300)
   
-  # Optional: save to file
-  ggsave(paste0("avg_speed_", n, "_cars.png"), p, width = 6, height = 4, dpi = 300)
+  message("Saved: ", outfile)
 }
 
+
+
+```
+
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(rlang)
+
+csv_path <- "table_brand.csv"
+raw <- read_csv(csv_path, skip = 6, show_col_types = FALSE)
+names(raw) <- make.names(names(raw))
+
+# Detect the "number of cars" column automatically
+car_col <- grep("^number[._-]?of[._-]?cars$", names(raw), ignore.case = TRUE, value = TRUE)
+car_sym <- sym(car_col)
+
+comm_col <- grep("^number[._-]?of[._-]?brands$", names(raw),
+                 ignore.case = TRUE, value = TRUE)
+comm_sym <- sym(comm_col)
+
+# Summarise mean ± sd for each tick
+summary_df <- raw %>%
+  group_by(!!car_sym, !!comm_sym, ticks) %>%
+  summarise(
+    mean_speed = mean(avg.speed, na.rm = TRUE),
+    sd_speed   = sd(avg.speed,   na.rm = TRUE),
+    .groups    = "drop"
+  )
+
+# Create output folder if desired
+outdir <- "plots"
+if (!dir.exists(outdir)) dir.create(outdir)
+
+# Loop through each value of number_of_cars
+for (n in unique(summary_df[[car_col]])) {
+  for (b in unique(summary_df[[comm_col]])) {
+    df <- filter(summary_df, !!car_sym == n, !!comm_sym == b)
+    
+    p <- ggplot(df, aes(x = ticks, y = mean_speed)) +
+      geom_ribbon(aes(ymin = mean_speed - sd_speed,
+                      ymax = mean_speed + sd_speed),
+                  fill = "red", alpha = 0.3) +
+      geom_line(color = "darkred", linewidth = 1) +
+      labs(title = paste("Average speed over time (", n, " cars ", b, " brands)", sep = ""),
+           x = "Ticks", y = "Average speed") +
+      theme_minimal()
+    
+    # --- SAVE AS PNG ---
+    outfile <- file.path(outdir, paste0("brand_avg_speed_", n, "cars_", b, "brands.png"))
+    ggsave(outfile, plot = p, width = 7, height = 5, dpi = 300)
+    
+    message("Saved: ", outfile)
+  }
+}
+
+
+
+```
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(rlang)
+
+csv_path <- "table_brand.csv"
+raw <- read_csv(csv_path, skip = 6, show_col_types = FALSE)
+names(raw) <- make.names(names(raw))   # e.g., "avg-speed" -> "avg.speed"
+
+# Detect columns
+car_col  <- grep("^number[._-]?of[._-]?cars$",   names(raw), ignore.case = TRUE, value = TRUE)
+brand_col<- grep("^number[._-]?of[._-]?brands$", names(raw), ignore.case = TRUE, value = TRUE)
+stopifnot(length(car_col) == 1, length(brand_col) == 1)
+car_sym   <- sym(car_col)
+brand_sym <- sym(brand_col)
+
+# Summarise mean ± sd for each tick per (cars, brands)
+summary_df <- raw %>%
+  group_by(!!car_sym, !!brand_sym, ticks) %>%
+  summarise(
+    mean_speed = mean(avg.speed, na.rm = TRUE),
+    sd_speed   = sd(avg.speed,   na.rm = TRUE),
+    .groups    = "drop_last"
+  ) %>%
+  ungroup()
+
+# Output folder
+outdir <- "plots_brand_lines"
+if (!dir.exists(outdir)) dir.create(outdir)
+
+# Helper label
+brand_lab <- function(x) paste0(x, " brands")
+
+# One plot per number_of_cars, multiple brand lines/colors on the same plot
+for (n in sort(unique(summary_df[[car_col]]))) {
+  df_n <- filter(summary_df, !!car_sym == n)
+
+  p <- ggplot(df_n, aes(x = ticks, y = mean_speed, color = factor(!!brand_sym), group = !!brand_sym)) +
+    # Optional uncertainty band per brand (comment out if you only want lines)
+    geom_ribbon(aes(ymin = mean_speed - sd_speed, ymax = mean_speed + sd_speed,
+                    fill = factor(!!brand_sym), color = NULL),
+                alpha = 0.15) +
+    geom_line(linewidth = 1) +
+    scale_color_discrete(name = "Brands", labels = brand_lab) +
+    scale_fill_discrete(name = "Brands", labels = brand_lab) +
+    labs(
+      title = paste0("Average speed over time (", n, " cars)"),
+      x = "Ticks",
+      y = "Average speed"
+    ) +
+    theme_minimal() +
+    theme(legend.position = "right")
+
+  outfile <- file.path(outdir, paste0("avg_speed_lines_", n, "cars.png"))
+  ggsave(outfile, plot = p, width = 8, height = 5, dpi = 300)
+  message("Saved: ", outfile)
+}
+
+# (Optional) One combined plot with facets by number_of_cars, color by brand count
+p_all <- ggplot(summary_df, aes(x = ticks, y = mean_speed,
+                                color = factor(!!brand_sym), group = interaction(!!brand_sym, !!car_sym))) +
+  geom_line() +
+  facet_wrap(vars(!!car_sym), scales = "free_y", labeller = label_both) +
+  scale_color_discrete(name = "Brands", labels = brand_lab) +
+  labs(title = "Average speed by number of cars (lines = brands)",
+       x = "Ticks", y = "Average speed") +
+  theme_minimal()
+
+ggsave(file.path(outdir, "avg_speed_all_cars_lines_by_brand.png"),
+       plot = p_all, width = 12, height = 7, dpi = 300)
+
+```
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(rlang)
+
+# ---- file paths ----
+csv_path_all  <- "table_all.csv"
+csv_path_none <- "table_none.csv"
+
+# ---- read files ----
+raw_all  <- read_csv(csv_path_all,  skip = 6, show_col_types = FALSE) %>% mutate(setting = "ALL")
+raw_none <- read_csv(csv_path_none, skip = 6, show_col_types = FALSE) %>% mutate(setting = "NONE")
+
+# make column names R-safe (avg-speed -> avg.speed, etc.)
+names(raw_all)  <- make.names(names(raw_all))
+names(raw_none) <- make.names(names(raw_none))
+
+# ---- combine ----
+raw <- bind_rows(raw_all, raw_none)
+
+# ---- detect key columns robustly ----
+car_col <- grep("^number[._-]?of[._-]?cars$", names(raw), ignore.case = TRUE, value = TRUE)
+stopifnot(length(car_col) == 1)
+car_sym <- sym(car_col)
+
+# sanity check expected columns
+stopifnot(all(c("ticks", "avg.speed", "setting") %in% names(raw)))
+
+# ---- aggregate mean ± sd per tick for each (cars, setting) ----
+summary_df <- raw %>%
+  group_by(!!car_sym, setting, ticks) %>%
+  summarise(
+    mean_speed = mean(avg.speed, na.rm = TRUE),
+    sd_speed   = sd(avg.speed,   na.rm = TRUE),
+    .groups    = "drop_last"
+  ) %>%
+  ungroup()
+
+# ---- output dir ----
+outdir <- "plots_all_vs_none"
+if (!dir.exists(outdir)) dir.create(outdir)
+
+# ---- one PNG per number_of_cars: lines for ALL vs NONE ----
+for (n in sort(unique(summary_df[[car_col]]))) {
+  df_n <- filter(summary_df, !!car_sym == n)
+
+  p <- ggplot(df_n, aes(x = ticks, y = mean_speed, color = setting)) +
+    # comment out the ribbon if you want only lines
+    geom_ribbon(aes(ymin = mean_speed - sd_speed,
+                    ymax = mean_speed + sd_speed,
+                    fill = setting, color = NULL),
+                alpha = 0.18) +
+    geom_line(linewidth = 1) +
+    labs(
+      title = paste0("Average speed over time (", n, " cars) — ALL vs NONE"),
+      x = "Ticks",
+      y = "Average speed",
+      color = "Setting",
+      fill  = "Setting"
+    ) +
+    theme_minimal()
+
+  outfile <- file.path(outdir, paste0("avg_speed_", n, "cars_ALL_vs_NONE.png"))
+  ggsave(outfile, plot = p, width = 8, height = 5, dpi = 300)
+  message("Saved: ", outfile)
+}
+
+# ---- optional: one big faceted summary (panels = #cars) ----
+p_all <- ggplot(summary_df, aes(ticks, mean_speed, color = setting)) +
+  geom_line() +
+  facet_wrap(vars(!!car_sym), scales = "free_y", labeller = label_both) +
+  labs(title = "ALL vs NONE by number of cars", x = "Ticks", y = "Average speed") +
+  theme_minimal()
+
+ggsave(file.path(outdir, "avg_speed_ALL_vs_NONE_faceted.png"),
+       plot = p_all, width = 12, height = 7, dpi = 300)
+
+```
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(rlang)
+
+# ---- file paths ----
+csv_path_brand <- "table_brand.csv"
+csv_path_all   <- "table_all.csv"
+csv_path_none  <- "table_none.csv"
+
+# ---- read each dataset ----
+raw_brand <- read_csv(csv_path_brand, skip = 6, show_col_types = FALSE) %>%
+  mutate(setting = "BRAND")
+raw_all   <- read_csv(csv_path_all,   skip = 6, show_col_types = FALSE) %>%
+  mutate(setting = "ALL")
+raw_none  <- read_csv(csv_path_none,  skip = 6, show_col_types = FALSE) %>%
+  mutate(setting = "NONE")
+
+# ---- make names syntactically valid ----
+names(raw_brand) <- make.names(names(raw_brand))
+names(raw_all)   <- make.names(names(raw_all))
+names(raw_none)  <- make.names(names(raw_none))
+
+# ---- unify the relevant columns ----
+raw <- bind_rows(raw_brand, raw_all, raw_none)
+
+# Detect key columns robustly
+car_col   <- grep("^number[._-]?of[._-]?cars$", names(raw),   ignore.case = TRUE, value = TRUE)
+brand_col <- grep("^number[._-]?of[._-]?brands$", names(raw), ignore.case = TRUE, value = TRUE)
+
+stopifnot(length(car_col) == 1)
+car_sym   <- sym(car_col)
+
+# Create brand column if missing (for ALL/NONE)
+if (length(brand_col) == 0) {
+  raw$number.of.brands <- NA
+  brand_col <- "number.of.brands"
+}
+brand_sym <- sym(brand_col)
+
+# Ensure standard columns exist
+stopifnot(all(c("ticks", "avg.speed", "setting") %in% names(raw)))
+
+# ---- summarise mean ± sd per tick, cars, setting ----
+summary_df <- raw %>%
+  group_by(!!car_sym, setting, ticks) %>%
+  summarise(
+    mean_speed = mean(avg.speed, na.rm = TRUE),
+    sd_speed   = sd(avg.speed,   na.rm = TRUE),
+    .groups    = "drop_last"
+  ) %>%
+  ungroup()
+
+# ---- output directory ----
+outdir <- "plots_all_none_brand"
+if (!dir.exists(outdir)) dir.create(outdir)
+
+# ---- one PNG per number_of_cars ----
+for (n in sort(unique(summary_df[[car_col]]))) {
+  df_n <- filter(summary_df, !!car_sym == n)
+
+  p <- ggplot(df_n, aes(x = ticks, y = mean_speed, color = setting)) +
+    geom_ribbon(aes(ymin = mean_speed - sd_speed,
+                    ymax = mean_speed + sd_speed,
+                    fill = setting, color = NULL),
+                alpha = 0.18) +
+    geom_line(linewidth = 1) +
+    labs(
+      title = paste0("Average speed over time (", n, " cars)"),
+      x = "Ticks",
+      y = "Average speed (mean ± sd)",
+      color = "Setting",
+      fill  = "Setting"
+    ) +
+    scale_color_manual(values = c("BRAND" = "#1b9e77", "ALL" = "#d95f02", "NONE" = "#7570b3")) +
+    scale_fill_manual(values  = c("BRAND" = "#1b9e77", "ALL" = "#d95f02", "NONE" = "#7570b3")) +
+    theme_minimal() +
+    theme(legend.position = "right")
+
+  outfile <- file.path(outdir, paste0("avg_speed_", n, "cars_ALL_NONE_BRAND.png"))
+  ggsave(outfile, plot = p, width = 8, height = 5, dpi = 300)
+  message("Saved: ", outfile)
+}
+
+# ---- optional: one combined faceted plot (panels = #cars) ----
+p_all <- ggplot(summary_df, aes(x = ticks, y = mean_speed, color = setting)) +
+  geom_line() +
+  facet_wrap(vars(!!car_sym), scales = "free_y", labeller = label_both) +
+  scale_color_manual(values = c("BRAND" = "#1b9e77", "ALL" = "#d95f02", "NONE" = "#7570b3")) +
+  labs(
+    title = "Average speed by intercommunication setting and number of cars",
+    x = "Ticks",
+    y = "Average speed"
+  ) +
+  theme_minimal()
+
+ggsave(file.path(outdir, "avg_speed_ALL_NONE_BRAND_faceted.png"),
+       plot = p_all, width = 12, height = 7, dpi = 300)
+
+```
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(rlang)
+
+# ---- file paths ----
+csv_path_brand <- "table_brand.csv"
+csv_path_all   <- "table_all.csv"
+csv_path_none  <- "table_none.csv"
+
+# ---- read datasets ----
+raw_brand <- read_csv(csv_path_brand, skip = 6, show_col_types = FALSE) %>%
+  mutate(setting = "BRAND")
+raw_all   <- read_csv(csv_path_all,   skip = 6, show_col_types = FALSE) %>%
+  mutate(setting = "ALL")
+raw_none  <- read_csv(csv_path_none,  skip = 6, show_col_types = FALSE) %>%
+  mutate(setting = "NONE")
+
+# ---- normalize column names ----
+names(raw_brand) <- make.names(names(raw_brand))
+names(raw_all)   <- make.names(names(raw_all))
+names(raw_none)  <- make.names(names(raw_none))
+
+# ---- combine all ----
+raw <- bind_rows(raw_brand, raw_all, raw_none)
+
+# Detect columns robustly
+car_col   <- grep("^number[._-]?of[._-]?cars$", names(raw),   ignore.case = TRUE, value = TRUE)
+brand_col <- grep("^number[._-]?of[._-]?brands$", names(raw), ignore.case = TRUE, value = TRUE)
+stopifnot(length(car_col) == 1)
+car_sym   <- sym(car_col)
+
+# For ALL and NONE, add dummy brand info (so plotting works)
+if (length(brand_col) == 0) {
+  raw$number.of.brands <- NA
+  brand_col <- "number.of.brands"
+}
+brand_sym <- sym(brand_col)
+
+# ---- make sure essential columns exist ----
+stopifnot(all(c("ticks", "avg.speed", "setting") %in% names(raw)))
+
+# ---- output folder ----
+outdir <- "plots_all_none_each_brand"
+if (!dir.exists(outdir)) dir.create(outdir)
+
+# ---- plot each number_of_cars ----
+for (n in sort(unique(raw[[car_col]]))) {
+
+  df_n <- filter(raw, !!car_sym == n)
+
+  # base layers
+  p <- ggplot(df_n, aes(x = ticks, y = avg.speed)) +
+    theme_minimal() +
+    labs(
+      title = paste0("Average speed over time (", n, " cars)"),
+      x = "Ticks",
+      y = "Average speed"
+    )
+
+  # --- add BRAND lines (one per brand) ---
+  df_brand <- filter(df_n, setting == "BRAND" & !is.na(!!brand_sym))
+  if (nrow(df_brand) > 0) {
+    p <- p +
+      geom_line(data = df_brand,
+                aes(color = factor(!!brand_sym), group = !!brand_sym),
+                linewidth = 0.8, alpha = 0.9) +
+      scale_color_brewer(palette = "Set2",
+                         name = "Brands",
+                         labels = function(x) paste0("Brand ", x))
+  }
+
+  # --- add ALL and NONE mean lines (thicker, distinct colors) ---
+  df_all  <- df_n %>% filter(setting == "ALL")  %>%
+    group_by(ticks) %>% summarise(mean_speed = mean(avg.speed, na.rm = TRUE))
+  df_none <- df_n %>% filter(setting == "NONE") %>%
+    group_by(ticks) %>% summarise(mean_speed = mean(avg.speed, na.rm = TRUE))
+
+  p <- p +
+    geom_line(data = df_all,  aes(y = mean_speed, color = "ALL")) +
+    geom_line(data = df_none, aes(y = mean_speed, color = "NONE")) +
+    scale_color_manual(
+      values = c("2" = "#1b9e77", "3" = "#66a61e", "4" = "#e6ab02", "5" = "#7570b3",
+                 "ALL" = "#d95f02", "NONE" = "#666666"),
+      name = "Legend",
+      breaks = c("2", "3", "4", "5", "ALL", "NONE"),
+      labels = c("Brand 2", "Brand 3", "Brand 4", "Brand 5", "ALL", "NONE")
+    )
+
+  outfile <- file.path(outdir, paste0("avg_speed_", n, "cars_ALL_NONE_each_brand.png"))
+  ggsave(outfile, plot = p, width = 9, height = 5, dpi = 300)
+  message("Saved: ", outfile)
+}
+
+# ---- Optional: one combined faceted overview ----
+p_all <- ggplot(raw, aes(x = ticks, y = avg.speed)) +
+  geom_line(data = filter(raw, setting == "BRAND" & !is.na(!!brand_sym)),
+            aes(color = factor(!!brand_sym), group = interaction(setting, !!brand_sym))) +
+  geom_line(data = filter(raw, setting == "ALL"),
+            aes(color = "ALL")) +
+  geom_line(data = filter(raw, setting == "NONE"),
+            aes(color = "NONE")) +
+  facet_wrap(vars(!!car_sym), scales = "free_y", labeller = label_both) +
+  scale_color_manual(
+    values = c("2" = "#1b9e77", "3" = "#66a61e", "4" = "#e6ab02", "5" = "#7570b3",
+               "ALL" = "#d95f02", "NONE" = "#666666"),
+    name = "Setting / Brand",
+    breaks = c("2", "3", "4", "5", "ALL", "NONE"),
+    labels = c("Brand 2", "Brand 3", "Brand 4", "Brand 5", "ALL", "NONE")
+  ) +
+  labs(title = "ALL, NONE, and individual BRAND runs by car count",
+       x = "Ticks", y = "Average speed") +
+  theme_minimal()
+
+ggsave(file.path(outdir, "avg_speed_ALL_NONE_each_brand_faceted.png"),
+       plot = p_all, width = 12, height = 7, dpi = 300)
+
+```
+```{r}
+# assumes you already built `raw` with BRAND/ALL/NONE and detected:
+# car_col, car_sym, brand_col, brand_sym
+
+outdir <- "plots_all_none_brand_means"
+if (!dir.exists(outdir)) dir.create(outdir)
+
+# colors for legend
+cols <- c("Brand 2"="#1b9e77","Brand 3"="#66a61e","Brand 4"="#e6ab02","Brand 5"="#7570b3",
+          "ALL"="#d95f02","NONE"="#666666")
+
+for (n in sort(unique(raw[[car_col]]))) {
+
+  df_n <- dplyr::filter(raw, !!car_sym == n)
+
+  # ---- BRAND: aggregate per tick per brand (this fixes the spiky lines) ----
+  brand_sum <- df_n %>%
+    dplyr::filter(setting == "BRAND", !is.na(!!brand_sym)) %>%
+    dplyr::group_by(ticks, !!brand_sym) %>%
+    dplyr::summarise(mean_speed = mean(avg.speed, na.rm = TRUE),
+                     sd_speed   = sd(avg.speed,   na.rm = TRUE),
+                     .groups = "drop") %>%
+    dplyr::mutate(label = paste0("Brand ", !!brand_sym))
+
+  # ---- ALL / NONE: aggregate per tick ----
+  all_sum <- df_n %>% dplyr::filter(setting == "ALL")  %>%
+    dplyr::group_by(ticks) %>%
+    dplyr::summarise(mean_speed = mean(avg.speed, na.rm = TRUE),
+                     sd_speed   = sd(avg.speed,   na.rm = TRUE),
+                     .groups = "drop")
+
+  none_sum <- df_n %>% dplyr::filter(setting == "NONE") %>%
+    dplyr::group_by(ticks) %>%
+    dplyr::summarise(mean_speed = mean(avg.speed, na.rm = TRUE),
+                     sd_speed   = sd(avg.speed,   na.rm = TRUE),
+                     .groups = "drop")
+
+  # ---- plot: BRAND lines + ALL/NONE lines (same style) ----
+  p <- ggplot() +
+    # (optional) ribbons for BRAND variability
+    # geom_ribbon(data = brand_sum,
+    #             aes(x = ticks, ymin = mean_speed - sd_speed, ymax = mean_speed + sd_speed,
+    #                 fill = label), alpha = 0.10, colour = NA) +
+    geom_line(data = brand_sum,
+              aes(x = ticks, y = mean_speed, color = label),
+              linewidth = 1.0) +
+    geom_line(data = all_sum,  aes(x = ticks, y = mean_speed, color = "ALL"),  linewidth = 1.2) +
+    geom_line(data = none_sum, aes(x = ticks, y = mean_speed, color = "NONE"), linewidth = 1.2) +
+    scale_color_manual(values = cols, breaks = names(cols), name = "Legend") +
+    # scale_fill_manual(values = cols, guide = "none")  # if you use ribbons
+    labs(title = paste0("Average speed over time (", n, " cars)"),
+         x = "Ticks", y = "Average speed") +
+    theme_minimal()
+
+  ggsave(file.path(outdir, paste0("avg_speed_", n, "cars_ALL_NONE_BRAND_means.png")),
+         plot = p, width = 9, height = 5, dpi = 300)
+}
+
+```
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(rlang)
+
+# --- read all three tables ---
+brand_csv <- "table_brand.csv"
+all_csv   <- "table_all.csv"
+none_csv  <- "table_none.csv"
+
+raw_brand <- read_csv(brand_csv, skip = 6, show_col_types = FALSE) %>% mutate(setting = "BRAND")
+raw_all   <- read_csv(all_csv,   skip = 6, show_col_types = FALSE) %>% mutate(setting = "ALL")
+raw_none  <- read_csv(none_csv,  skip = 6, show_col_types = FALSE) %>% mutate(setting = "NONE")
+
+# normalize names
+names(raw_brand) <- make.names(names(raw_brand))
+names(raw_all)   <- make.names(names(raw_all))
+names(raw_none)  <- make.names(names(raw_none))
+
+raw <- bind_rows(raw_brand, raw_all, raw_none)
+
+# detect columns
+car_col   <- grep("^number[._-]?of[._-]?cars$",   names(raw), ignore.case = TRUE, value = TRUE)
+brand_col <- grep("^number[._-]?of[._-]?brands$", names(raw), ignore.case = TRUE, value = TRUE)
+stopifnot(length(car_col) == 1)
+car_sym <- sym(car_col)
+
+if (!length(brand_col)) {
+  raw$number.of.brands <- NA_integer_
+  brand_col <- "number.of.brands"
+}
+brand_sym <- sym(brand_col)
+
+stopifnot(all(c("ticks","avg.speed","setting") %in% names(raw)))
+
+# ---------- build one tidy summary table for plotting ----------
+# BRAND: mean per tick per brand & cars
+brand_sum <- raw %>%
+  filter(setting == "BRAND", !is.na(!!brand_sym)) %>%
+  group_by(!!car_sym, ticks, !!brand_sym) %>%
+  summarise(mean_speed = mean(avg.speed, na.rm = TRUE), .groups = "drop") %>%
+  mutate(series = paste0("Brand ", !!brand_sym))
+
+# ALL / NONE: mean per tick per cars
+all_sum <- raw %>%
+  filter(setting == "ALL") %>%
+  group_by(!!car_sym, ticks) %>%
+  summarise(mean_speed = mean(avg.speed, na.rm = TRUE), .groups = "drop") %>%
+  mutate(series = "ALL")
+
+none_sum <- raw %>%
+  filter(setting == "NONE") %>%
+  group_by(!!car_sym, ticks) %>%
+  summarise(mean_speed = mean(avg.speed, na.rm = TRUE), .groups = "drop") %>%
+  mutate(series = "NONE")
+
+overview_df <- bind_rows(brand_sum, all_sum, none_sum)
+
+# color palette for all series
+cols <- c(
+  "Brand 2" = "#1b9e77",
+  "Brand 3" = "#66a61e",
+  "Brand 4" = "#e6ab02",
+  "Brand 5" = "#7570b3",
+  "ALL"     = "#d95f02",
+  "NONE"    = "#666666"
+)
+
+# ---------- BIG OVERVIEW PLOT ----------
+p_overview <- ggplot(overview_df, aes(x = ticks, y = mean_speed, color = series)) +
+  geom_line() +
+  facet_wrap(vars(!!car_sym), scales = "free_y", labeller = label_both) +
+  scale_color_manual(values = cols, name = "Setting / Brand") +
+  labs(
+    title = "Average speed: BRAND (2–5), ALL, and NONE by number of cars",
+    x = "Ticks", y = "Average speed"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "right",
+        plot.title = element_text(face = "bold", size = 16))
+
+# save
+outdir <- "plots_overview"
+if (!dir.exists(outdir)) dir.create(outdir)
+ggsave(file.path(outdir, "avg_speed_overview_all_none_brands.png"),
+       plot = p_overview, width = 14, height = 8, dpi = 300)
 
 ```
 
