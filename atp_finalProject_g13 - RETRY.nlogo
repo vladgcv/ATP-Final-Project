@@ -68,6 +68,9 @@ globals [
 
   ; to measure the average speed
   avg-speed
+
+  ; to measure the evolution of average speed through time
+  cumulative-avg
 ]
 
 patches-own [
@@ -279,7 +282,9 @@ to go
       ]
     ]
 
-    adjust-speed
+    if not is-crossing? [
+      adjust-speed
+    ]
     db-color self
 
     ;;; GUARD ;;;
@@ -293,11 +298,12 @@ to go
   ]
 
   ask junctions [
-    handle-junctions-new
+    handle-junctions
   ]
 
-  ifelse any? cars [
+  ifelse any? cars and ticks != 0 [
     set avg-speed mean [speed] of cars
+    set cumulative-avg ((cumulative-avg * (ticks - 1)) + avg-speed) / ticks
   ] [
     set avg-speed 0
   ]
@@ -345,7 +351,7 @@ end
 
 
 
-to turn-new
+to turn
   if next-turn = "left" [
     fd-centered 1
     set heading heading - 45
@@ -376,9 +382,9 @@ to turn-new
 end
 
 
-to continue-turn-new [j c]
+to continue-turn [j c]
   ask c [
-    turn-new
+    turn
 
     if has-turned? [
       set current-direction next-direction
@@ -410,7 +416,7 @@ to continue-turn-new [j c]
   ]
 end
 
-to start-turn-new [j c]
+to start-turn [j c]
   ask j [
     if car-N = c [ set car-N nobody ]
     if car-S = c [ set car-S nobody ]
@@ -424,6 +430,7 @@ to start-turn-new [j c]
     display
     fd 1
     display
+    set speed goal-speed
   ]
 end
 
@@ -448,13 +455,13 @@ to maybe-add-brand-buddy [j c-w leader]
     if consecutive != nobody [
       ;; extend crossing-now and start the follower
       ask j [ set crossing-now (turtle-set crossing-now consecutive) ]
-      start-turn-new j consecutive
+      start-turn j consecutive
     ]
   ]
 end
 
 
-to first-cross-new [c-w c-n]
+to first-cross [c-w c-n]
   ; get the CARS that arrived EARLIEST at the JUNCTION
   let earliest-arrival min [arrival-time] of c-w
   let earliest-cars    c-w with [ arrival-time = earliest-arrival ]
@@ -467,26 +474,26 @@ to first-cross-new [c-w c-n]
   let pick1 one-of filtered-by-right-rule
   ifelse pick1 != nobody [
     set crossing-now (turtle-set c-n pick1)
-    start-turn-new self pick1
+    start-turn self pick1
     maybe-add-brand-buddy self c-w pick1
   ] [
     let pick2 one-of filtered-by-left-turn
     ifelse pick2 != nobody [
       set crossing-now (turtle-set c-n pick2)
-      start-turn-new self pick2
+      start-turn self pick2
       maybe-add-brand-buddy self c-w pick2
     ] [
       let pick3 one-of earliest-cars
       if pick3 != nobody [
         set crossing-now (turtle-set c-n pick3)
-        start-turn-new self pick3
+        start-turn self pick3
         maybe-add-brand-buddy self c-w pick3
       ]
     ]
   ]
 end
 
-to handle-junctions-new
+to handle-junctions
   ; create a list of the cars waiting for their turn in the junction
   let cars-waiting no-turtles
 
@@ -507,11 +514,11 @@ to handle-junctions-new
 
   ifelse count crossing-now = 0 [
     ; if no cars are crossing now, get the first car and start the crossing process
-    first-cross-new cars-waiting crossing-now
+    first-cross cars-waiting crossing-now
   ] [
     ;; there are cars crossing; keep them going
     ask crossing-now [
-      continue-turn-new myself self   ;; (junction, car)
+      continue-turn myself self   ;; (junction, car)
     ]
 
     ;; if exactly one car is crossing, we may allow a non-conflicting companion
@@ -526,7 +533,7 @@ to handle-junctions-new
 
       if w != nobody [
         ;; start the additional compatible car
-        start-turn-new self w  ;; (junction, car)  ✅
+        start-turn self w  ;; (junction, car)  ✅
       ]
 
     ]
@@ -863,8 +870,8 @@ NIL
 PLOT
 835
 11
-1669
-621
+1240
+303
 Speed distribution
 NIL
 NIL
@@ -887,7 +894,7 @@ number-of-cars
 number-of-cars
 0
 300
-160.0
+180.0
 10
 1
 NIL
@@ -939,6 +946,25 @@ avg-speed
 17
 1
 11
+
+PLOT
+835
+310
+1240
+629
+Average Speed Evolution
+Time (ticks)
+Avg Sp
+0.0
+10.0
+0.0
+1.0
+true
+false
+"" ""
+PENS
+"avg-speed" 1.0 0 -16777216 true "" "plot mean [speed] of cars"
+"cumulative-avg" 1.0 1 -2674135 true "" "plot cumulative-avg"
 
 @#$#@#$#@
 ## WHAT IS IT?
