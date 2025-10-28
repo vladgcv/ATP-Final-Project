@@ -8,9 +8,34 @@ This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute
 Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
 
 ```{r}
-csv_path <- "table_none.csv"
+library(ggplot2)
+library(readr)
+library(dplyr)
 
-raw <- readr::read_csv(csv_path, skip = 6, show_col_types = FALSE)
+csv_path <- "table_none.csv"
+raw <- read_csv(csv_path, skip = 6, show_col_types = FALSE)
+
+unique_cars <- unique(raw$number.of.cars)
+
+for (n in unique_cars) {
+  df <- filter(raw, number_of_cars == n)
+  
+  p <- ggplot(df, aes(x = ticks, y = avg.speed)) +
+    geom_line(color = "red", alpha = 0.6) +
+    geom_smooth(se = TRUE, color = "black") +
+    labs(
+      title = paste("Average Speed for", n, "Cars"),
+      x = "Time steps",
+      y = "Average speed"
+    ) +
+    theme_minimal()
+  
+  print(p)  # Show in RStudio Viewer
+  
+  # Optional: save to file
+  ggsave(paste0("avg_speed_", n, "_cars.png"), p, width = 6, height = 4, dpi = 300)
+}
+
 
 ```
 
