@@ -343,47 +343,38 @@ end
 ; =========================
 ; MOVEMENT IN JUNCTIONS
 
+
+
 to turn-new
-  ; step-by-step left turn
   if next-turn = "left" [
-    fd 1
-    display
+    fd-centered 1
     set heading heading - 45
-    display
+    snap-center
     set heading heading - 45
-    display
-    fd 1
-    display
-    fd 1
-    display
-    fd 1
-    display
+    snap-center
+    fd-centered 1
+    fd-centered 1
+    fd-centered 1
   ]
 
-  ; step-by-step right turn
   if next-turn = "right" [
     set heading heading + 45
-    display
+    snap-center
     set heading heading + 45
-    display
-    fd 1
-    display
-    fd 1
-    display
+    snap-center
+    fd-centered 1
+    fd-centered 1
   ]
 
-  ; step-by-step straight ahead
   if next-turn = "straight" [
-    fd 1
-    display
-    fd 1
-    display
-    fd 1
-    display
+    fd-centered 1
+    fd-centered 1
+    fd-centered 1
   ]
 
   set has-turned? true
 end
+
 
 to continue-turn-new [j c]
   ask c [
@@ -392,7 +383,7 @@ to continue-turn-new [j c]
     if has-turned? [
       set current-direction next-direction
       set current-direction dir-from-heading heading
-      set next-direction    one-of remove opposite-direction (current-direction) clockwise
+      set next-direction    one-of remove (opposite-direction current-direction) clockwise
       set next-turn         get-next-turn current-direction next-direction
       set arrival-time      -1
 
@@ -402,6 +393,14 @@ to continue-turn-new [j c]
       set observed?         false
       set is-crossing?      false
       set has-turned?       false
+    ]
+    let ahead patch-ahead 1
+    if any? other cars-here [
+      if ahead != nobody and
+         ([pcolor] of ahead = white or [pcolor] of ahead = orange) and
+         (not any? cars-on ahead) [
+        fd-centered 1
+      ]
     ]
   ]
 
@@ -428,6 +427,7 @@ to start-turn-new [j c]
   ]
 end
 
+
 ;; Try to add one same-brand follower that doesn't conflict with leader.
 ;; j = junction (self in junction context), c-w = cars-waiting
 to maybe-add-brand-buddy [j c-w leader]
@@ -438,8 +438,8 @@ to maybe-add-brand-buddy [j c-w leader]
     brand = [brand] of leader and
     arrival-time >= [arrival-time] of leader and
     not paths-conflict?
-      (approach-from-direction current-direction) next-turn
-      (approach-from-direction [current-direction] of leader) ([next-turn] of leader)
+      (approach-from-direction current-direction) next-turn next-direction
+    (approach-from-direction [current-direction] of leader) ([next-turn] of leader) ([next-direction] of leader)
   ]
 
   if any? same-brand-waiters [
@@ -520,18 +520,34 @@ to handle-junctions-new
 
       ;; choose a waiting car whose path does NOT conflict with x
       let w one-of cars-waiting with [
-        not paths-conflict? current-direction next-turn
-                            [current-direction] of x [next-turn] of x
+        not paths-conflict? current-direction next-turn next-direction
+        [current-direction] of x [next-turn] of x [next-direction] of x
       ]
 
       if w != nobody [
         ;; start the additional compatible car
-        start-turn-new w self  ;; (car, junction)
+        start-turn-new self w  ;; (junction, car)  ✅
       ]
+
     ]
   ]
 
 end
+
+;; true if the patch immediately in the car's next-turn direction is occupied
+to-report exit-patch-occupied? [c]
+  let final-dir [next-direction] of c
+  let exit-patch nobody
+
+  if final-dir = "north" [ set exit-patch [patch-at  0  1] of c ]
+  if final-dir = "south" [ set exit-patch [patch-at  0 -1] of c ]
+  if final-dir = "east"  [ set exit-patch [patch-at  1  0] of c ]
+  if final-dir = "west"  [ set exit-patch [patch-at -1  0] of c ]
+
+  report any? cars-on exit-patch
+end
+
+
 
 to-report approach-from-direction [d]
   if d = "north" [ report "S" ]
@@ -541,7 +557,7 @@ to-report approach-from-direction [d]
 end
 
 
-to-report paths-conflict? [a-approach a-turn b-approach b-turn]
+to-report paths-conflict? [a-approach a-turn a-dest b-approach b-turn b-dest]
   ;; Accept either approach letters (N/E/S/W) or road directions (north/…)
   if member? a-approach ["north" "east" "south" "west"] [
     set a-approach approach-from-direction a-approach
@@ -552,6 +568,7 @@ to-report paths-conflict? [a-approach a-turn b-approach b-turn]
 
   ;; in case the cars are coming from the same approach
   if a-approach = b-approach [ report true ]
+  if a-dest = b-dest [ report true ]
 
   let opp?       (b-approach = opposite a-approach)
   let app-right? (b-approach = right-of a-approach)
@@ -883,7 +900,7 @@ SWITCH
 513
 debug?
 debug?
-0
+1
 1
 -1000
 
@@ -1284,6 +1301,23 @@ NetLogo 6.4.0
 @#$#@#$#@
 @#$#@#$#@
 @#$#@#$#@
+<experiments>
+  <experiment name="experiment" repetitions="100" runMetricsEveryStep="true">
+    <setup>setup</setup>
+    <go>go</go>
+    <metric>avg-speed</metric>
+    <enumeratedValueSet variable="debug?">
+      <value value="false"/>
+    </enumeratedValueSet>
+    <enumeratedValueSet variable="number-of-brands">
+      <value value="1"/>
+    </enumeratedValueSet>
+    <steppedValueSet variable="number-of-cars" first="50" step="50" last="300"/>
+    <enumeratedValueSet variable="Intercommunication">
+      <value value="&quot;NONE&quot;"/>
+    </enumeratedValueSet>
+  </experiment>
+</experiments>
 @#$#@#$#@
 @#$#@#$#@
 default
