@@ -311,7 +311,7 @@ to go
   ]
 
   tick
-
+  if ticks >= 200 [stop]
 end
 
 ; handling the SPEED of the CAR while on ROAD
@@ -1331,7 +1331,7 @@ NetLogo 6.4.0
 @#$#@#$#@
 @#$#@#$#@
 <experiments>
-  <experiment name="experiment" repetitions="100" runMetricsEveryStep="true">
+  <experiment name="experiment" repetitions="1000" runMetricsEveryStep="true">
     <setup>setup</setup>
     <go>go</go>
     <exitCondition>ticks &gt;= 200</exitCondition>
