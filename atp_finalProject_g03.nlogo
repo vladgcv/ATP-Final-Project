@@ -1,10 +1,16 @@
+; Title: "How does the degree of intercommunication among autonomous vehicles impact the level of traffic congestion?"
+; Authors: Vlad George Coicea (S5562465), Stefan Racoveanu (S5465079), Belen Hidalgo (S5562821), Andrea Buha (S5248868)
+; Institution: University of Groningen
+; Course: Agent Technology Practical (Course code: WBAI046-05.2025-2026.1)
+; Date: November 2025
+
 breed [cars car]
 breed [junctions junction]
 
-junctions-own [
-  ; id of junction
-  id
+; =========================
+; AGENTS & Variables
 
+junctions-own [
   ; the cars crossing righ now
   crossing-now
 
@@ -22,11 +28,14 @@ cars-own [
   ; north, south, east, west
   current-direction
 
+  ; what direction they are going to switch to
+  next-direction
+
   ; next junction
   next-junction
 
-  ; what direction they are going to switch to
-  next-direction
+  ; indicates the next turn (right, left, straight)
+  next-turn
 
   ; tick at which the car reached the stopline
   arrival-time
@@ -39,9 +48,6 @@ cars-own [
 
   ; by what intersection is the car observed
   observed?
-
-  ; indicates the next turn (right, left, straight)
-  next-turn
 
   ; shows if the car has completed the turn in the intersection
   has-turned?
@@ -63,9 +69,6 @@ globals [
   ; deceleration of cars
   slowdown-overshoot
 
-  ; to store each brand
-  brands
-
   ; to measure the average speed
   avg-speed
 
@@ -80,6 +83,8 @@ patches-own [
   ; true at the 4 patches which make up a junction
   junction-on-patch?
 ]
+
+; =========================
 
 ; =========================
 ; SETUP
@@ -209,20 +214,11 @@ to place-cars
   ]
 end
 
-; setup the brands
-to set-brands
-  if intercommunication = "ALL" [
-    set number-of-brands 1
-  ]
-  set brands n-values number-of-brands [ i -> i + 1 ]
-end
-
 ; main SETUP function
 to setup
   clear-all
   set clockwise ["north" "east" "south" "west"]
 
-  set-brands
   draw-map
   create-roads-junctions
   place-cars
@@ -250,6 +246,7 @@ to go
       set current-direction dir-from-heading heading
       let j next-junction-from patch-here current-direction
       if  j != nobody           [ set next-junction j ]
+      if  debug? and j = nobody [ db-car self "NO next-intersection found" ]
     ]
 
     let ahead1  patch-ahead 0.9
@@ -271,24 +268,28 @@ to go
       let dir current-direction
 
       ; only if next-intersection is a real junction agent
-      if is-turtle? next-junction and [breed] of next-junction = junctions [
+      ifelse is-turtle? next-junction and [breed] of next-junction = junctions [
         ask next-junction [
           if dir = "north" [ set car-S myself ]
           if dir = "south" [ set car-N myself ]
           if dir = "east"  [ set car-W myself ]
           if dir = "west"  [ set car-E myself ]
         ]
+      ] [
+        if debug? [ db-car self "next junction is NOT a junction" ]
       ]
     ]
 
     if not is-crossing? [
       adjust-speed
     ]
+    db-color self
 
     ;;; GUARD ;;;
     ifelse road-forward [
       fd speed
     ] [
+      db-color self
       set speed 0
       snap-center
     ]
@@ -309,7 +310,7 @@ to go
   if ticks >= 200 [stop]
 end
 
-; handling the SPEED of the CAR while on ROAD
+; Handles the SPEED of the CAR while on ROAD
 to adjust-speed
   ; 1.6 patches forward from the turtle’s position,
   ; 70° wide (centered on its current heading)
@@ -319,8 +320,10 @@ to adjust-speed
   ifelse any? other cars-ahead with [ (heading + [heading] of myself) mod 180 = 90 ] [
     ifelse speed <= slowdown-overshoot [
       set speed 0
+      if debug? [ db "speed set to 0 in adjust-speed" ]
     ] [
       set speed speed - slowdown-overshoot
+      if debug? [ db "speed updated in adjust-speed" ]
     ]
 
   ] [
@@ -345,8 +348,8 @@ end
 ; =========================
 ; MOVEMENT IN JUNCTIONS
 
-
-
+; Executes the turning maneuver of a car based on its planned turn type
+; ("left", "right", or "straight") by adjusting heading and moving stepwise through the junction.
 to turn
   if next-turn = "left" [
     fd-centered 1
@@ -377,7 +380,8 @@ to turn
   set has-turned? true
 end
 
-
+; Manages the continuation of a car’s movement through a junction.
+; Calls `turn`, updates the car’s navigation parameters, and maintains the list of currently crossing cars.
 to continue-turn [j c]
   ask c [
     turn
@@ -412,6 +416,8 @@ to continue-turn [j c]
   ]
 end
 
+; Initiates the crossing sequence for a selected car at a junction.
+; Removes the car from its waiting lane and begins its forward movement into the intersection.
 to start-turn [j c]
   ask j [
     if car-N = c [ set car-N nobody ]
@@ -430,9 +436,8 @@ to start-turn [j c]
   ]
 end
 
-
-;; Try to add one same-brand follower that doesn't conflict with leader.
-;; j = junction (self in junction context), c-w = cars-waiting
+; Attempts to include a same-brand vehicle to cross simultaneously
+; if its trajectory does not conflict with that of the leading car and intercommunication allows it.
 to maybe-add-brand-buddy [j c-w leader]
   if intercommunication != "BRAND" or intercommunication != "ALL" [ stop ]
 
@@ -456,7 +461,8 @@ to maybe-add-brand-buddy [j c-w leader]
   ]
 end
 
-
+; Selects which car (or cars) should begin crossing based on arrival time and precedence rules.
+; Handles left-turn yielding, right-hand priority, and invokes brand-based coordination when applicable.
 to first-cross [c-w c-n]
   ; get the CARS that arrived EARLIEST at the JUNCTION
   let earliest-arrival min [arrival-time] of c-w
@@ -489,6 +495,8 @@ to first-cross [c-w c-n]
   ]
 end
 
+; Coordinates all car movements at a given junction per simulation tick.
+; Determines eligible waiting cars, manages ongoing crossings, and admits non-conflicting vehicles to proceed.
 to handle-junctions
   ; create a list of the cars waiting for their turn in the junction
   let cars-waiting no-turtles
@@ -537,7 +545,8 @@ to handle-junctions
 
 end
 
-;; true if the patch immediately in the car's next-turn direction is occupied
+; Checks whether the patch at a car’s intended exit direction is occupied by another vehicle.
+; Returns true if the exit path is blocked, preventing the car from proceeding.
 to-report exit-patch-occupied? [c]
   let final-dir [next-direction] of c
   let exit-patch nobody
@@ -550,8 +559,8 @@ to-report exit-patch-occupied? [c]
   report any? cars-on exit-patch
 end
 
-
-
+; Converts a movement direction ("north", "south", etc.)
+; into the corresponding approach label used in conflict detection ("N", "S", "E", "W").
 to-report approach-from-direction [d]
   if d = "north" [ report "S" ]
   if d = "east"  [ report "W" ]
@@ -559,7 +568,8 @@ to-report approach-from-direction [d]
   if d = "west"  [ report "E" ]
 end
 
-
+; Determines whether two cars’ approach directions and intended turns intersect.
+; Returns true if their trajectories overlap or could lead to a collision within the junction.
 to-report paths-conflict? [a-approach a-turn a-dest b-approach b-turn b-dest]
   ;; Accept either approach letters (N/E/S/W) or road directions (north/…)
   if member? a-approach ["north" "east" "south" "west"] [
@@ -596,19 +606,18 @@ to-report paths-conflict? [a-approach a-turn a-dest b-approach b-turn b-dest]
   report false
 end
 
-
 ; Step N patches, snapping at each patch
 to fd-centered [n]
   fd n
   snap-center
 end
 
-; Hard snap the current turtle to the exact center of its current patch
+; Hard snaps the current turtle to the exact center of its current patch
 to snap-center
   move-to patch-here
 end
 
-; indicates the type of TURN, based on CURRENT DIRECTION and NEXT DIRECTION
+; Indicates the type of TURN, based on CURRENT DIRECTION and NEXT DIRECTION
 to-report get-next-turn [curr-dir next-dir]
   let i1 position curr-dir clockwise
   let i2 position next-dir clockwise
@@ -619,6 +628,8 @@ to-report get-next-turn [curr-dir next-dir]
   if diff = 3 [ report "left" ]
 end
 
+; Searches along the road in the specified direction from patch `p`
+; Returns the nearest junction agent ahead, wrapping around the world if necessary.
 to-report next-junction-from [p dir]
 
   ; Return the next junction agent in direction `dir` starting from patch `p`.
@@ -658,7 +669,7 @@ to-report next-junction-from [p dir]
   report nobody
 end
 
-;; helper: should car c be eligible to join the waiting set?
+; Should car c be eligible to join the waiting set?
 to-report eligible-to-queue? [c]
   if not is-turtle? c [ report false ]
   if intercommunication = "ALL"  [ report true ]
@@ -683,9 +694,9 @@ to-report approach-of [c]
   ]
 end
 
-; opposite DIRECTION
+; Opposite DIRECTION
 ; (same as the function above,
-; but it works only with north, south, east, west)
+; It works only with north, south, east, west)
 to-report opposite-direction [d]
   if d = "north" [report "south"]
   if d = "south" [report "north"]
@@ -693,9 +704,9 @@ to-report opposite-direction [d]
   if d = "west" [report "east"]
 end
 
-; opposite DIRECTION
+; Opposite DIRECTION
 ; (same as the function above,
-; but it works only with N, S, E, W)
+; It works only with N, S, E, W)
 to-report opposite [d]
   if d = "N" [ report "S" ]
   if d = "E" [ report "W" ]
@@ -703,7 +714,7 @@ to-report opposite [d]
   if d = "W" [ report "E" ]
 end
 
-; direction of OTHER CAR coming from the RIGHT
+; Direction of OTHER CAR coming from the RIGHT
 to-report right-of [d]
   if d = "N" [ report "E" ]
   if d = "E" [ report "S" ]
@@ -711,18 +722,18 @@ to-report right-of [d]
   if d = "W" [ report "N" ]
 end
 
-; left-turn → YIELDS to the car coming from straight ahead/right
+; Left-turn → YIELDS to the car coming from straight ahead/right
 to-report yields-by-left-turn? [c candidates]
   let my-app approach-of c
-
-  if [next-turn] of c != "left" [ report false ]
+  let my-turn get-next-turn ([current-direction] of c) ([next-direction] of c)
+  if my-turn != "left" [ report false ]
   report any? candidates with [
     (approach-of self = opposite my-app) and
     (get-next-turn current-direction next-direction = "straight" or get-next-turn current-direction next-direction = "right")
   ]
 end
 
-; same-arrival tie → yield to the CAR approaching from the RIGHT
+; Same-arrival tie → yield to the CAR approaching from the RIGHT
 to-report loses-right-rule? [c candidates]
   let my-app approach-of c
   let my-arr [arrival-time] of c
@@ -731,6 +742,9 @@ to-report loses-right-rule? [c candidates]
   ]
 end
 
+; Converts a turtle’s numeric heading (0–360°)
+; Into one of the four cardinal direction strings:
+; "north", "east", "south", or "west".
 to-report dir-from-heading [h]
   let a (h mod 360)
   if a < 0 [ set a a + 360 ]
@@ -740,6 +754,74 @@ to-report dir-from-heading [h]
   ;; a in [225,315)
   report "west"
 end
+
+; =========================
+
+; =========================
+; DEBUGGING
+
+; Lightweight logger for generic messages.
+; Prefixes each message with the current tick in square brackets.
+to db [msg]
+  if debug? [ show (word "[" ticks "] " msg) ]
+end
+
+; Structured logger for a specific car turtle `c`.
+; Prints tick, car id, current/next directions, junction flag, and patch coordinates.
+to db-car [c msg]
+  if debug? [
+    let here [patch-here] of c
+    show (word "[" ticks "] car#" [who] of c
+               " dir=" [current-direction] of c
+               " nextDir=" [next-direction] of c
+               " atJ=" [at-junction?] of c
+               " p=(" [pxcor] of here "," [pycor] of here ") "
+               msg)
+  ]
+end
+
+; Structured logger for a junction turtle `j`.
+; Reports tick, junction id, and the occupant ids (or “-”) for lanes N, E, S, W.
+to db-j [j msg]
+  if debug? [
+    show (word "[" ticks "] J#" [who] of j
+               " lanes=("
+               (ifelse-value is-turtle? [car-N] of j [[who] of [car-N] of j] ["-"]) ","
+               (ifelse-value is-turtle? [car-E] of j [[who] of [car-E] of j] ["-"]) ","
+               (ifelse-value is-turtle? [car-S] of j [[who] of [car-S] of j] ["-"]) ","
+               (ifelse-value is-turtle? [car-W] of j [[who] of [car-W] of j] ["-"])
+               ") " msg)
+  ]
+end
+
+; Verbose color/state probe for a car `c`.
+; Prints car id, heading, crossing/at-junction flags, and color names of current and ahead patches.
+to db-color [c]   ;; c is a car (or nobody)
+  if not debug? [ stop ]
+
+  let ahead-patch [patch-ahead 0.5] of c
+  let here-patch  [patch-here]      of c
+
+  let here-col  [pcolor] of here-patch
+  let ahead-col [pcolor] of ahead-patch
+
+  show (word "car#" [who] of c
+             " heading=" [heading] of c
+             " crossing?=" [is-crossing?] of c
+             " at-junction?=" [at-junction?] of c
+             " here=" (color-name here-col)
+             " ahead=" (color-name ahead-col))
+end
+
+; Maps a patch color constant to a human-readable name.
+to-report color-name [c]
+  if c = white  [ report "white"  ]
+  if c = yellow [ report "yellow" ]
+  if c = orange [ report "orange" ]
+  if c = black  [ report "black"  ]
+end
+
+; =========================
 @#$#@#$#@
 GRAPHICS-WINDOW
 210
@@ -829,11 +911,22 @@ number-of-cars
 number-of-cars
 0
 300
-180.0
+0.0
 10
 1
 NIL
 HORIZONTAL
+
+SWITCH
+60
+480
+163
+513
+debug?
+debug?
+1
+1
+-1000
 
 CHOOSER
 30
@@ -843,7 +936,7 @@ CHOOSER
 Intercommunication
 Intercommunication
 "NONE" "BRAND" "ALL"
-2
+1
 
 SLIDER
 20
@@ -854,7 +947,7 @@ number-of-brands
 number-of-brands
 2
 5
-1.0
+5.0
 1
 1
 NIL
@@ -891,41 +984,9 @@ PENS
 "cumulative-avg" 1.0 1 -2674135 true "" "plot cumulative-avg"
 
 @#$#@#$#@
-## WHAT IS IT?
-
-(a general understanding of what the model is trying to show or explain)
-
-## HOW IT WORKS
-
-(what rules the agents use to create the overall behavior of the model)
-
-## HOW TO USE IT
-
-(how to use the model, including a description of each of the items in the Interface tab)
-
-## THINGS TO NOTICE
-
-(suggested things for the user to notice while running the model)
-
-## THINGS TO TRY
-
-(suggested things for the user to try to do (move sliders, switches, etc.) with the model)
-
-## EXTENDING THE MODEL
-
-(suggested things to add or change in the Code tab to make the model more complicated, detailed, accurate, etc.)
-
-## NETLOGO FEATURES
-
-(interesting or unusual features of NetLogo that the model uses, particularly in the Code tab; or where workarounds were needed for missing features)
-
-## RELATED MODELS
-
-(models in the NetLogo Models Library and elsewhere which are of related interest)
-
-## CREDITS AND REFERENCES
-
-(a reference to the model's URL on the web if it has one, as well as any other necessary credits, citations, and links)
+### Model Documentation
+Full model description, equations, and experiment results are provided in the 
+associated LaTeX report submitted with this project.
 @#$#@#$#@
 default
 true
