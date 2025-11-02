@@ -635,6 +635,272 @@ ggsave(file.path(outdir, "avg_speed_overview_all_none_brands.png"),
 
 ```
 
+```{r}
+library(readr)
+library(dplyr)
+library(rlang)
+
+# --- File paths ---
+csv_path_brand <- "table_brand.csv"
+csv_path_all   <- "table_all.csv"
+csv_path_none  <- "table_none.csv"
+
+# --- Read data ---
+raw_brand <- read_csv(csv_path_brand, skip = 6, show_col_types = FALSE) %>%
+  mutate(setting = "BRAND")
+raw_all   <- read_csv(csv_path_all,   skip = 6, show_col_types = FALSE) %>%
+  mutate(setting = "ALL")
+raw_none  <- read_csv(csv_path_none,  skip = 6, show_col_types = FALSE) %>%
+  mutate(setting = "NONE")
+
+# --- Normalize column names ---
+names(raw_brand) <- make.names(names(raw_brand))
+names(raw_all)   <- make.names(names(raw_all))
+names(raw_none)  <- make.names(names(raw_none))
+
+# --- Combine ---
+raw <- bind_rows(raw_brand, raw_all, raw_none)
+
+# --- Detect columns ---
+car_col   <- grep("^number[._-]?of[._-]?cars$", names(raw), ignore.case = TRUE, value = TRUE)
+brand_col <- grep("^number[._-]?of[._-]?brands$", names(raw), ignore.case = TRUE, value = TRUE)
+stopifnot(length(car_col) == 1)
+car_sym <- sym(car_col)
+
+# If number.of.brands missing for ALL/NONE, fill with NA
+if (!length(brand_col)) {
+  raw$number.of.brands <- NA_integer_
+  brand_col <- "number.of.brands"
+}
+brand_sym <- sym(brand_col)
+
+# --- Compute average speed per tick, then average across all ticks ---
+avg_table <- raw %>%
+  group_by(setting, !!car_sym, !!brand_sym) %>%
+  summarise(mean_over_ticks = mean(avg.speed, na.rm = TRUE), .groups = "drop") %>%
+  arrange(setting, !!car_sym, !!brand_sym)
+
+# --- Print the table nicely ---
+print(avg_table)
+
+# --- Optionally save it as CSV ---
+write.csv(avg_table, "average_speed_summary.csv", row.names = FALSE)
+
+```
+
+```{r}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(rlang)
+
+# --- file paths ---
+csv_brand <- "table_brand.csv"
+csv_all   <- "table_all.csv"
+csv_none  <- "table_none.csv"
+
+# --- read & tag ---
+raw_brand <- read_csv(csv_brand, skip = 6, show_col_types = FALSE) %>% mutate(setting = "BRAND")
+raw_all   <- read_csv(csv_all,   skip = 6, show_col_types = FALSE) %>% mutate(setting = "ALL")
+raw_none  <- read_csv(csv_none,  skip = 6, show_col_types = FALSE) %>% mutate(setting = "NONE")
+
+# normalize names
+names(raw_brand) <- make.names(names(raw_brand))
+names(raw_all)   <- make.names(names(raw_all))
+names(raw_none)  <- make.names(names(raw_none))
+
+raw <- bind_rows(raw_brand, raw_all, raw_none)
+
+# detect key columns (robust to dash/underscore/case)
+car_col   <- grep("^number[._-]?of[._-]?cars$",   names(raw), ignore.case = TRUE, value = TRUE)
+brand_col <- grep("^number[._-]?of[._-]?brands$", names(raw), ignore.case = TRUE, value = TRUE)
+stopifnot(length(car_col) == 1)
+car_sym <- sym(car_col)
+
+# add brand column for ALL/NONE if missing
+if (!length(brand_col)) {
+  raw$number.of.brands <- NA_integer_
+  brand_col <- "number.of.brands"
+}
+brand_sym <- sym(brand_col)
+
+stopifnot(all(c("ticks", "avg.speed", "setting") %in% names(raw)))
+
+# --- compute mean over all ticks (and runs) per configuration ---
+summ <- raw %>%
+  group_by(!!car_sym, setting, !!brand_sym) %>%
+  summarise(mean_over_ticks = mean(avg.speed, na.rm = TRUE), .groups = "drop") %>%
+  mutate(
+    colname = case_when(
+      setting == "NONE"                                   ~ "ticks_none",
+      setting == "ALL"                                    ~ "ticks_all",
+      setting == "BRAND" & !!brand_sym == 2              ~ "ticks_2_brands",
+      setting == "BRAND" & !!brand_sym == 3              ~ "ticks_3_brands",
+      setting == "BRAND" & !!brand_sym == 4              ~ "ticks_4_brands",
+      setting == "BRAND" & !!brand_sym == 5              ~ "ticks_5_brands",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(colname))
+
+# --- pivot to the requested wide format ---
+table_out <- summ %>%
+  select(!!car_sym, colname, mean_over_ticks) %>%
+  distinct() %>%
+  pivot_wider(
+    names_from  = colname,
+    values_from = mean_over_ticks
+  ) %>%
+  arrange(!!car_sym)
+
+# pretty column name for cars
+names(table_out)[names(table_out) == car_col] <- "number_of_cars"
+
+# show the table
+print(table_out, n = nrow(table_out))
+
+# optional: save as CSV
+write.csv(table_out, "avg_speed_by_setting_wide.csv", row.names = FALSE)
+
+```
+
+```{r}
+
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(effectsize)
+
+# Read the three CSVs and add a communication label
+all_data  <- read_csv("table_all.csv", skip = 6, show_col_types = FALSE)  %>% mutate(communication = "ALL")
+none_data <- read_csv("table_none.csv", skip = 6, show_col_types = FALSE) %>% mutate(communication = "NONE")
+brand_data <- read_csv("table_brand.csv", skip = 6, show_col_types = FALSE) %>% mutate(communication = "BRAND")
+
+names(all_data)
+
+# Combine and rename columns (note the backticks!)
+df <- bind_rows(all_data, none_data, brand_data) %>%
+  rename(
+    num_cars = `number-of-cars`,
+    mean_speed = `avg-speed`
+  ) %>%
+  select(num_cars, mean_speed, communication)
+
+
+# Convert columns to factors
+df <- df %>%
+  mutate(
+    communication = factor(communication, levels = c("NONE", "BRAND", "ALL")),
+    num_cars = factor(num_cars)
+  )
+anova_model <- aov(mean_speed ~ communication * num_cars, data = df)
+summary(anova_model)
+summary(anova_model)[[1]]
+#TukeyHSD(anova_model, "communication")
+
+eta_squared(anova_model)
+ggplot(df, aes(x = num_cars, y = mean_speed, color = communication, group = communication)) +
+  stat_summary(fun = mean, geom = "line", linewidth = 1) +
+  stat_summary(fun.data = mean_cl_boot, geom = "errorbar", width = 5) +
+  labs(x = "Number of Cars", y = "Average Speed", color = "Communication Level") +
+  theme_minimal(base_size = 13)
+
+
+```
+```{r}
+library(readr)
+library(dplyr)
+library(rlang)
+library(ggplot2)
+
+# --- Read data ---
+csv_none  <- "table_none.csv"
+csv_all   <- "table_all.csv"
+csv_brand <- "table_brand.csv"
+
+raw_none  <- read_csv(csv_none,  skip = 6, show_col_types = FALSE) %>% mutate(setting = "NONE")
+raw_all   <- read_csv(csv_all,   skip = 6, show_col_types = FALSE) %>% mutate(setting = "ALL")
+raw_brand <- read_csv(csv_brand, skip = 6, show_col_types = FALSE) %>% mutate(setting = "BRAND")
+
+# Normalize column names
+names(raw_none)  <- make.names(names(raw_none))
+names(raw_all)   <- make.names(names(raw_all))
+names(raw_brand) <- make.names(names(raw_brand))
+
+# Combine everything
+raw <- bind_rows(raw_none, raw_all, raw_brand)
+
+# Detect key columns
+car_col   <- grep("^number[._-]?of[._-]?cars$", names(raw),   ignore.case = TRUE, value = TRUE)
+brand_col <- grep("^number[._-]?of[._-]?brands$", names(raw), ignore.case = TRUE, value = TRUE)
+stopifnot(length(car_col) == 1)
+car_sym <- sym(car_col)
+
+if (!length(brand_col)) {
+  raw$number.of.brands <- NA_integer_
+  brand_col <- "number.of.brands"
+}
+brand_sym <- sym(brand_col)
+
+# --- Aggregate mean speed per configuration ---
+avg_df <- raw %>%
+  group_by(setting, !!car_sym, !!brand_sym) %>%
+  summarise(mean_speed = mean(avg.speed, na.rm = TRUE), .groups = "drop")
+
+head(avg_df)
+
+# Filter out brand count info (we only need the overall BRAND mean)
+brand_avg <- avg_df %>%
+  filter(setting == "BRAND") %>%
+  group_by(!!car_sym, setting) %>%
+  summarise(mean_speed = mean(mean_speed), .groups = "drop")
+
+# anova_df built as before (BRAND averaged across its brand counts if you did that)
+anova_df <- anova_df %>%
+  mutate(
+    setting = factor(setting, levels = c("NONE","BRAND","ALL")),
+    cars_f  = factor(.data[[car_col]])   # make number_of_cars categorical
+  )
+
+aov2 <- aov(mean_speed ~ setting * cars_f, data = anova_df)
+summary(aov2)
+
+# Tukey post-hoc for the 'setting' factor
+TukeyHSD(aov2, which = "setting")
+
+
+brand_only <- avg_df %>%
+  filter(setting == "BRAND") %>%
+  mutate(brands_f = factor(.data[[brand_col]]))  # <- turn into factor
+
+# sanity: should show levels 2,3,4,5
+levels(brand_only$brands_f)
+
+aov_brand <- aov(mean_speed ~ brands_f, data = brand_only)
+summary(aov_brand)
+
+# Tukey pairwise among 2,3,4,5
+TukeyHSD(aov_brand, which = "brands_f")
+
+ggplot(anova_df, aes(x = setting, y = mean_speed, fill = setting)) +
+  geom_boxplot(alpha = 0.6) +
+  facet_wrap(vars(!!car_sym), scales = "free_y", labeller = label_both) +
+  labs(title = "Average speed distribution by setting and car density",
+       x = "Setting", y = "Mean speed") +
+  theme_minimal()
+stats_table <- anova_df %>%
+  group_by(setting) %>%
+  summarise(
+    overall_mean = mean(mean_speed),
+    sd = sd(mean_speed),
+    .groups = "drop"
+  )
+write.csv(stats_table, "summary_stats_table.csv", row.names = FALSE)
+print(stats_table)
+
+
+```
+
 Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
 
 When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).

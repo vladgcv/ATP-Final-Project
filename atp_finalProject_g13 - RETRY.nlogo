@@ -250,7 +250,6 @@ to go
       set current-direction dir-from-heading heading
       let j next-junction-from patch-here current-direction
       if  j != nobody           [ set next-junction j ]
-      if  debug? and j = nobody [ db-car self "NO next-intersection found" ]
     ]
 
     let ahead1  patch-ahead 0.9
@@ -272,28 +271,24 @@ to go
       let dir current-direction
 
       ; only if next-intersection is a real junction agent
-      ifelse is-turtle? next-junction and [breed] of next-junction = junctions [
+      if is-turtle? next-junction and [breed] of next-junction = junctions [
         ask next-junction [
           if dir = "north" [ set car-S myself ]
           if dir = "south" [ set car-N myself ]
           if dir = "east"  [ set car-W myself ]
           if dir = "west"  [ set car-E myself ]
         ]
-      ] [
-        if debug? [ db-car self "next junction is NOT a junction" ]
       ]
     ]
 
     if not is-crossing? [
       adjust-speed
     ]
-    db-color self
 
     ;;; GUARD ;;;
     ifelse road-forward [
       fd speed
     ] [
-      db-color self
       set speed 0
       snap-center
     ]
@@ -324,10 +319,8 @@ to adjust-speed
   ifelse any? other cars-ahead with [ (heading + [heading] of myself) mod 180 = 90 ] [
     ifelse speed <= slowdown-overshoot [
       set speed 0
-      if debug? [ db "speed set to 0 in adjust-speed" ]
     ] [
       set speed speed - slowdown-overshoot
-      if debug? [ db "speed updated in adjust-speed" ]
     ]
 
   ] [
@@ -722,9 +715,7 @@ end
 to-report yields-by-left-turn? [c candidates]
   let my-app approach-of c
 
-  ;ISN'Y THIS JUST NEXT-TURN?
-  let my-turn get-next-turn ([current-direction] of c) ([next-direction] of c)
-  if my-turn != "left" [ report false ]
+  if [next-turn] of c != "left" [ report false ]
   report any? candidates with [
     (approach-of self = opposite my-app) and
     (get-next-turn current-direction next-direction = "straight" or get-next-turn current-direction next-direction = "right")
@@ -749,65 +740,6 @@ to-report dir-from-heading [h]
   ;; a in [225,315)
   report "west"
 end
-
-; =========================
-
-; =========================
-; DEBUGGING
-
-to db [msg]
-  if debug? [ show (word "[" ticks "] " msg) ]
-end
-
-to db-car [c msg]
-  if debug? [
-    let here [patch-here] of c
-    show (word "[" ticks "] car#" [who] of c
-               " dir=" [current-direction] of c
-               " nextDir=" [next-direction] of c
-               " atJ=" [at-junction?] of c
-               " p=(" [pxcor] of here "," [pycor] of here ") "
-               msg)
-  ]
-end
-
-to db-j [j msg]
-  if debug? [
-    show (word "[" ticks "] J#" [who] of j
-               " lanes=("
-               (ifelse-value is-turtle? [car-N] of j [[who] of [car-N] of j] ["-"]) ","
-               (ifelse-value is-turtle? [car-E] of j [[who] of [car-E] of j] ["-"]) ","
-               (ifelse-value is-turtle? [car-S] of j [[who] of [car-S] of j] ["-"]) ","
-               (ifelse-value is-turtle? [car-W] of j [[who] of [car-W] of j] ["-"])
-               ") " msg)
-  ]
-end
-to db-color [c]   ;; c is a car (or nobody)
-  if not debug? [ stop ]
-
-  let ahead-patch [patch-ahead 0.5] of c
-  let here-patch  [patch-here]      of c
-
-  let here-col  [pcolor] of here-patch
-  let ahead-col [pcolor] of ahead-patch
-
-  show (word "car#" [who] of c
-             " heading=" [heading] of c
-             " crossing?=" [is-crossing?] of c
-             " at-junction?=" [at-junction?] of c
-             " here=" (color-name here-col)
-             " ahead=" (color-name ahead-col))
-end
-
-to-report color-name [c]
-  if c = white  [ report "white"  ]
-  if c = yellow [ report "yellow" ]
-  if c = orange [ report "orange" ]
-  if c = black [report "black"]
-end
-
-
-; =========================
 @#$#@#$#@
 GRAPHICS-WINDOW
 210
@@ -902,17 +834,6 @@ number-of-cars
 1
 NIL
 HORIZONTAL
-
-SWITCH
-60
-480
-163
-513
-debug?
-debug?
-1
-1
--1000
 
 CHOOSER
 30
