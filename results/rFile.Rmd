@@ -808,6 +808,60 @@ ggplot(df, aes(x = num_cars, y = mean_speed, color = communication, group = comm
 
 ```
 ```{r}
+# Load required libraries
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(effectsize)
+
+# Read and label data
+all_data  <- read_csv("table_all.csv",  skip = 6, show_col_types = FALSE) %>% mutate(communication = "ALL")
+none_data <- read_csv("table_none.csv", skip = 6, show_col_types = FALSE) %>% mutate(communication = "NONE")
+brand_data <- read_csv("table_brand.csv", skip = 6, show_col_types = FALSE) %>% mutate(communication = "BRAND")
+
+# Combine all for the main ANOVA (as before)
+df <- bind_rows(all_data, none_data, brand_data) %>%
+  rename(
+    num_cars = `number-of-cars`,
+    mean_speed = `avg-speed`,
+    num_brands = `number-of-brands`
+  ) %>%
+  select(num_cars, num_brands, mean_speed, communication)
+
+# Convert to factors
+df <- df %>%
+  mutate(
+    communication = factor(communication, levels = c("NONE", "BRAND", "ALL")),
+    num_cars = factor(num_cars),
+    num_brands = factor(num_brands)
+  )
+
+# Existing ANOVA: communication * num_cars
+anova_model <- aov(mean_speed ~ communication * num_cars, data = df)
+summary(anova_model)
+eta_squared(anova_model)
+
+# New ANOVA: number of brands (only for BRAND communication)
+brand_only <- df %>% filter(communication == "BRAND")
+
+anova_brands <- aov(mean_speed ~ num_brands * num_cars, data = brand_only)
+summary(anova_brands)
+eta_squared(anova_brands)
+
+# Tukey test to see which brand levels differ
+# TukeyHSD(anova_brands, "num_brands")
+
+# Visualization
+ggplot(brand_only, aes(x = num_brands, y = mean_speed, group = num_cars, color = num_cars)) +
+  stat_summary(fun = mean, geom = "line") +
+  stat_summary(fun.data = mean_cl_boot, geom = "errorbar", width = 0.1) +
+  labs(x = "Number of Brands", y = "Average Speed", color = "Number of Cars") +
+  theme_minimal(base_size = 13)
+
+```
+
+
+```{r}
 library(readr)
 library(dplyr)
 library(rlang)
